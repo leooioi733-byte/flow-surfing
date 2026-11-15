@@ -40,6 +40,7 @@ export interface ReplayFrame {
   maneuverDuration: number;
   maneuverSpin: number;
   airHeight: number;
+  landingCompression: number;
   inBarrel: boolean;
   barrelTimer: number;
   fallType: FallType;
@@ -101,6 +102,7 @@ function createEmptyFrame(): ReplayFrame {
     maneuverDuration: 1,
     maneuverSpin: 0,
     airHeight: 0,
+    landingCompression: 0,
     inBarrel: false,
     barrelTimer: 0,
     fallType: 'sideways',
@@ -236,6 +238,7 @@ export class ReplayBuffer {
     f.maneuverDuration = state.maneuverDuration;
     f.maneuverSpin = state.maneuverSpin;
     f.airHeight = state.airHeight;
+    f.landingCompression = state.landingCompression;
     f.inBarrel = state.inBarrel;
     f.barrelTimer = state.barrelTimer;
     f.fallType = state.fallType;
@@ -390,6 +393,7 @@ export class ReplayBuffer {
     outState.maneuverDuration = ref.maneuverDuration;
     outState.maneuverSpin = blend ? lerpAngle(a.maneuverSpin, b.maneuverSpin, t) : ref.maneuverSpin;
     outState.airHeight = lerpNum(a.airHeight, b.airHeight);
+    outState.landingCompression = lerpNum(a.landingCompression, b.landingCompression);
     outState.inBarrel = ref.inBarrel;
     outState.barrelTimer = lerpNum(a.barrelTimer, b.barrelTimer);
     outState.fallType = ref.fallType;

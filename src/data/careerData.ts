@@ -3,8 +3,13 @@ import careerReefPhoto from '../assets/images/career_reef_lineup_1794697516643.j
 import careerTwilightPhoto from '../assets/images/career_twilight_point_1794697517749.jpg';
 import {
   AISurfer,
+  AISurfStyleFocus,
+  CareerAchievementDef,
   CareerBoardItem,
+  CareerEvent,
+  CareerObjective,
   CareerPhotoKey,
+  CareerReputationLevel,
   CareerTierId,
   CareerTierInfo,
   SponsorBrand,
@@ -528,6 +533,7 @@ export function createInitialOpponents(): AISurfer[] {
 
   return specs.map((s, idx) => ({
     ...s,
+    styleFocus: inferAiStyleFocus(s),
     seasonPoints: 0,
     careerPoints: s.tier === 'mundial' ? 4200 + (7 - (idx % 7)) * 350 : s.tier === 'acesso' ? 1800 : s.tier === 'regional' ? 600 : 0,
     previousRank: (idx % 7) + 1,
@@ -536,6 +542,243 @@ export function createInitialOpponents(): AISurfer[] {
     podiums: 0,
     bestWave: 0,
   }));
+}
+
+export function inferAiStyleFocus(ai: {
+  barrelSkill: number;
+  airSkill: number;
+  style: string;
+}): AISurfStyleFocus {
+  const lower = ai.style.toLowerCase();
+  if (
+    ai.barrelSkill - ai.airSkill >= 0.08 ||
+    lower.includes('tubo') ||
+    lower.includes('barrel') ||
+    lower.includes('tube')
+  ) {
+    return 'barrel';
+  }
+  if (
+    ai.airSkill - ai.barrelSkill >= 0.06 ||
+    lower.includes('aéreo') ||
+    lower.includes('aerial') ||
+    lower.includes('cutback') ||
+    lower.includes('snap') ||
+    lower.includes('floater') ||
+    lower.includes('conectad')
+  ) {
+    return 'technical';
+  }
+  return 'allround';
+}
+
+export const REPUTATION_LEVELS: CareerReputationLevel[] = [
+  { id: 'novato', title: 'Novato da Praia', minRep: 0, nextRep: 60 },
+  { id: 'promessa', title: 'Promessa Local', minRep: 60, nextRep: 140 },
+  { id: 'competidor', title: 'Competidor Respeitado', minRep: 140, nextRep: 240 },
+  { id: 'destaque', title: 'Destaque do Circuito', minRep: 240, nextRep: 380 },
+  { id: 'elite', title: 'Contender de Elite', minRep: 380, nextRep: 560 },
+  { id: 'icone', title: 'Ícone Mundial FLOW', minRep: 560, nextRep: 800 },
+  { id: 'lenda', title: 'Lenda dos Mares', minRep: 800, nextRep: null },
+];
+
+export function getCareerReputationLevel(reputation: number): {
+  current: CareerReputationLevel;
+  levelIndex: number;
+  progressPct: number;
+} {
+  let idx = 0;
+  for (let i = 0; i < REPUTATION_LEVELS.length; i++) {
+    if (reputation >= REPUTATION_LEVELS[i].minRep) {
+      idx = i;
+    }
+  }
+  const current = REPUTATION_LEVELS[idx];
+  const progressPct =
+    current.nextRep === null
+      ? 100
+      : Math.min(
+          100,
+          Math.max(
+            0,
+            Math.round(((reputation - current.minRep) / Math.max(1, current.nextRep - current.minRep)) * 100)
+          )
+        );
+  return { current, levelIndex: idx + 1, progressPct };
+}
+
+export const CAREER_ACHIEVEMENTS_CATALOG: CareerAchievementDef[] = [
+  {
+    id: 'first-heat-win',
+    title: 'Estreia Vitoriosa',
+    description: 'Vença sua primeira bateria oficial no Circuito FLOW.',
+    category: 'bateria',
+    repReward: 15,
+  },
+  {
+    id: 'first-event-title',
+    title: 'Primeiro Troféu',
+    description: 'Conquiste o 1º lugar geral em uma etapa do campeonato.',
+    category: 'carreira',
+    repReward: 30,
+  },
+  {
+    id: 'excellent-wave',
+    title: 'Onda Excelente',
+    description: 'Registre uma nota 8.0 ou superior em bateria oficial.',
+    category: 'bateria',
+    repReward: 25,
+  },
+  {
+    id: 'nine-club',
+    title: 'Clube do 9+',
+    description: 'Alcance uma onda memorável com nota 9.0 ou maior.',
+    category: 'elite',
+    repReward: 45,
+  },
+  {
+    id: 'flow-combo',
+    title: 'Conexão Fluida',
+    description: 'Complete uma sequência de 3 ou mais manobras em uma única onda.',
+    category: 'manobras',
+    repReward: 25,
+  },
+  {
+    id: 'barrel-master',
+    title: 'Visão de Tubo',
+    description: 'Complete um tubo limpo de 1.5s ou mais dentro de uma bateria.',
+    category: 'manobras',
+    repReward: 30,
+  },
+  {
+    id: 'rivalry-victor',
+    title: 'Vencedor de Duelo',
+    description: 'Vença um confronto direto Head-to-Head contra um rival.',
+    category: 'bateria',
+    repReward: 35,
+  },
+  {
+    id: 'sponsor-complete',
+    title: 'Atleta Patrocinado',
+    description: 'Cumpra integralmente um contrato de patrocínio.',
+    category: 'carreira',
+    repReward: 25,
+  },
+  {
+    id: 'tier-promotion',
+    title: 'Ascensão de Divisão',
+    description: 'Garanta acesso para uma divisão superior do Circuito FLOW.',
+    category: 'carreira',
+    repReward: 50,
+  },
+  {
+    id: 'world-champion',
+    title: 'Campeão Mundial FLOW',
+    description: 'Termine a temporada do Circuito Mundial Profissional em 1º lugar.',
+    category: 'elite',
+    repReward: 120,
+  },
+];
+
+export function buildCareerObjectivesForTier(
+  tier: CareerTierId,
+  season: number,
+  calendar: CareerEvent[]
+): CareerObjective[] {
+  const tierIndex = tier === 'mundial' ? 3 : tier === 'acesso' ? 2 : tier === 'regional' ? 1 : 0;
+  const prizeScale = 1 + tierIndex * 1.45;
+  const repScale = 1 + tierIndex * 0.65;
+
+  const targetHeatScore = [10.5, 12.2, 13.8, 15.2][tierIndex];
+  const targetWaveScore = [7.2, 7.8, 8.2, 8.6][tierIndex];
+  const targetSeq = tierIndex >= 2 ? 3 : 2;
+  const targetBarrelSec = tierIndex >= 2 ? 1.6 : 1.0;
+
+  const showcaseEvent = calendar[Math.min(1, calendar.length - 1)] ?? calendar[0];
+
+  const objectives: CareerObjective[] = [
+    {
+      id: `obj-s${season}-${tier}-score`,
+      title: `Somatório ${targetHeatScore.toFixed(1)}+ em Bateria`,
+      description: `Alcance pelo menos ${targetHeatScore.toFixed(1)} pontos combinados nas 2 melhores ondas de uma bateria.`,
+      kind: 'heat_score',
+      targetValue: targetHeatScore,
+      progress: 0,
+      completed: false,
+      rewardPrize: Math.round((320 * prizeScale) / 10) * 10,
+      rewardRep: Math.round(18 * repScale),
+      tier,
+    },
+    {
+      id: `obj-s${season}-${tier}-seq`,
+      title: `Sequência de ${targetSeq} Manobras`,
+      description: `Conecte ${targetSeq} manobras diferentes em fluxo na mesma onda durante uma bateria.`,
+      kind: 'sequence_chain',
+      targetValue: targetSeq,
+      progress: 0,
+      completed: false,
+      rewardPrize: Math.round((280 * prizeScale) / 10) * 10,
+      rewardRep: Math.round(16 * repScale),
+      tier,
+    },
+    {
+      id: `obj-s${season}-${tier}-wave`,
+      title: `Onda Nota ${targetWaveScore.toFixed(1)}+`,
+      description: `Execute uma onda consistente para receber nota ${targetWaveScore.toFixed(1)} ou maior dos juízes.`,
+      kind: 'excellent_wave',
+      targetValue: targetWaveScore,
+      progress: 0,
+      completed: false,
+      rewardPrize: Math.round((350 * prizeScale) / 10) * 10,
+      rewardRep: Math.round(20 * repScale),
+      tier,
+    },
+    {
+      id: `obj-s${season}-${tier}-final`,
+      title: 'Chegar à Final da Etapa',
+      description: `Avance pelas eliminatórias até disputar a Final de um campeonato do circuito.`,
+      kind: 'reach_final',
+      targetValue: 1,
+      progress: 0,
+      completed: false,
+      rewardPrize: Math.round((420 * prizeScale) / 10) * 10,
+      rewardRep: Math.round(24 * repScale),
+      tier,
+    },
+  ];
+
+  if (tierIndex >= 1) {
+    objectives.push({
+      id: `obj-s${season}-${tier}-barrel`,
+      title: `Tubo Limpo (${targetBarrelSec.toFixed(1)}s+)`,
+      description: `Encaixe um tubo limpo de ${targetBarrelSec.toFixed(1)}s ou mais em uma bateria oficial.`,
+      kind: 'barrel_time',
+      targetValue: targetBarrelSec,
+      progress: 0,
+      completed: false,
+      rewardPrize: Math.round((380 * prizeScale) / 10) * 10,
+      rewardRep: Math.round(22 * repScale),
+      tier,
+    });
+  }
+
+  if (showcaseEvent) {
+    objectives.push({
+      id: `obj-s${season}-${tier}-peak`,
+      title: `Título em ${showcaseEvent.name}`,
+      description: `Vença a etapa ${showcaseEvent.name} para consolidar domínio nesse pico.`,
+      kind: 'win_peak',
+      targetValue: 1,
+      targetBeachId: showcaseEvent.beachId,
+      progress: 0,
+      completed: false,
+      rewardPrize: Math.round((560 * prizeScale) / 10) * 10,
+      rewardRep: Math.round(32 * repScale),
+      tier,
+    });
+  }
+
+  return objectives;
 }
 
 export function buildRivalDialogue(

@@ -262,6 +262,13 @@ export interface SurferPhysicsState {
   lastQuality: ExecutionQuality | null;
   calloutId: number;
 
+  // Gameplay expansion: landing compression & maneuver flow sequences
+  landingCompression: number; // 0..1 smooth leg/body absorption after air/floater
+  sequenceChain: number; // 0+ connected maneuvers in active flow window
+  maxSequenceChain: number; // peak connected chain achieved during current wave
+  sequenceTag: string; // Discreet label e.g. "Bottom Turn → Cutback"
+  sequenceTier: number; // 0 = none, 1 = Flow, 2 = Power Combo, 3 = Pro Chain
+
   // Telemetry for particle emitters & SFX events
   justSplashed: boolean;
   splashIntensity: number;
@@ -284,6 +291,19 @@ export class SurfPhysicsEngine {
   private sprayImpactCooldown = 0;
   private speedGateCalloutCooldown = 0;
   private whitewaterExposure = 0;
+
+  // Balance inertia & steer snap tracking
+  private balanceVel = 0;
+  private prevSteerInput = 0;
+
+  // Maneuver sequence flow & anti-spam tracking
+  private sequenceWindowTimer = 0;
+  private lastManeuverType: ManeuverType | null = null;
+  private lastExitedBarrel = false;
+  private repeatSameCount = 0;
+  private sequenceVarietyBits = 0;
+  private queuedManeuver: ManeuverType | null = null;
+  private flowMomentumBonus = 0;
 
   constructor(beachEnv: BeachEnvironmentConfig) {
     this.beachEnv = beachEnv;
@@ -384,6 +404,11 @@ export class SurfPhysicsEngine {
       lastCallout: 'Walk to the water',
       lastQuality: null,
       calloutId: 1,
+      landingCompression: 0,
+      sequenceChain: 0,
+      maxSequenceChain: 0,
+      sequenceTag: '',
+      sequenceTier: 0,
       justSplashed: false,
       splashIntensity: 0,
       carvingIntensity: 0,
@@ -403,6 +428,9 @@ export class SurfPhysicsEngine {
     this.waveParams = this.createWaveParams(beachEnv, 1, 0);
     this.state = this.createInitialState();
     this.whitewaterExposure = 0;
+    this.balanceVel = 0;
+    this.prevSteerInput = 0;
+    this.resetSequenceState();
     this.speedGateCalloutCooldown = 0;
 
     if (startInWater) {
@@ -451,6 +479,7 @@ export class SurfPhysicsEngine {
         barrelTime: Math.round(s.currentWaveBarrelTime * 10) / 10,
         maneuvers: s.currentWaveManeuvers,
         bestManeuver: s.currentWaveBestManeuver || 'Linha na Parede',
+        maxSequenceChain: Math.max(s.maxSequenceChain, s.sequenceChain),
       });
     }
     s.currentWavePoints = 0;
@@ -458,6 +487,7 @@ export class SurfPhysicsEngine {
     s.currentWaveBestManeuver = '';
     s.currentWaveBestManeuverPts = 0;
     s.currentWaveBarrelTime = 0;
+    s.maxSequenceChain = 0;
   }
 
   private spawnNextWave(
@@ -494,7 +524,11 @@ export class SurfPhysicsEngine {
     s.underwaterAmount = 0;
     s.targetTimeScale = 1.0;
     s.slowMoHoldTimer = 0;
+    s.landingCompression = 0;
     this.whitewaterExposure = 0;
+    this.balanceVel = 0;
+    this.prevSteerInput = 0;
+    this.resetSequenceState();
 
     if (keepPhase === 'paddling' || keepPhase === 'beachWalk') {
       s.boardDetached = false;
@@ -505,6 +539,19 @@ export class SurfPhysicsEngine {
         );
       }
     }
+  }
+
+  private resetSequenceState() {
+    this.sequenceWindowTimer = 0;
+    this.lastManeuverType = null;
+    this.lastExitedBarrel = false;
+    this.repeatSameCount = 0;
+    this.sequenceVarietyBits = 0;
+    this.queuedManeuver = null;
+    this.flowMomentumBonus = 0;
+    this.state.sequenceChain = 0;
+    this.state.sequenceTag = '';
+    this.state.sequenceTier = 0;
   }
 
   private triggerCallout(text: string, quality: ExecutionQuality | null) {
@@ -577,6 +624,115 @@ export class SurfPhysicsEngine {
     return { avgY, blendedNormal: _contactN, centerSample: c };
   }
 
+  /**
+   * Advances continuous wave simulation and poses the player cleanly during
+   * pre-heat cinematic cutscenes (shoreline framing -> paddle out -> lineup).
+   */
+  public stepCutscene(rawDt: number, stage: number, stageProgress: number): WaveSample {
+    const s = this.state;
+    s.justSplashed = false;
+    s.splashIntensity = 0;
+    s.carvingIntensity = 0;
+    s.impactEventIntensity = 0;
+    s.impactWhitewater = 0;
+    s.justResurfaced = false;
+    s.executedManeuverType = null;
+    s.executedManeuverQuality = null;
+    s.failedManeuver = false;
+    s.justCaughtWave = false;
+    s.justDuckDived = false;
+    s.justExitedBarrel = false;
+    s.paddleStrokePulse = false;
+    s.footstepPulse = false;
+
+    const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
+    const wp = this.waveParams;
+    wp.simTime += dt;
+    wp.waveCenterZ += wp.waveSpeed * dt;
+    wp.breakX += wp.breakDir * wp.waveSpeed * 0.58 * dt;
+
+    if (wp.waveCenterZ > 10.5) {
+      wp.waveCenterZ = -138;
+      wp.breakX = -15;
+    }
+
+    const startX = -1.5;
+    const shoreZ = 2.6;
+    const lineupZ = -18.0;
+
+    let targetZ = shoreZ;
+    if (stage === 5) {
+      const t = THREE.MathUtils.clamp(stageProgress, 0, 1);
+      const smooth = t * t * (3 - 2 * t);
+      targetZ = THREE.MathUtils.lerp(shoreZ, lineupZ, smooth);
+      const prevStroke = Math.floor(s.paddleStrokePhase / Math.PI);
+      s.paddleStrokePhase += dt * 7.2;
+      if (Math.floor(s.paddleStrokePhase / Math.PI) !== prevStroke) {
+        s.paddleStrokePulse = true;
+      }
+      s.speed = 4.2;
+    } else if (stage >= 6) {
+      targetZ = lineupZ;
+      s.paddleStrokePhase += dt * 1.4;
+      s.speed = 0.6;
+    } else {
+      s.paddleStrokePhase += dt * 0.9;
+      s.speed = 0;
+    }
+
+    s.position.x = THREE.MathUtils.damp(s.position.x, startX, 8, dt);
+    s.position.z = THREE.MathUtils.damp(s.position.z, targetZ, stage === 5 ? 9 : 6, dt);
+    s.heading = lerpAngle(s.heading, Math.PI, 1 - Math.exp(-8 * dt));
+    s.phase = 'paddling';
+    s.boardDetached = false;
+
+    const sample = sampleSurfWave(s.position.x, s.position.z, wp);
+    const beachY = getBeachHeightAt(s.position.x, s.position.z);
+    const targetY = Math.max(beachY + 0.08, sample.height + 0.03);
+    s.position.y = THREE.MathUtils.damp(s.position.y, targetY, 12, dt);
+    s.roll = THREE.MathUtils.damp(s.roll, Math.sin(wp.simTime * 1.4) * 0.035, 6, dt);
+    s.pitch = THREE.MathUtils.damp(s.pitch, -sample.slopeSteepness * 0.14, 8, dt);
+    s.boardNormal.lerp(sample.normal, 1 - Math.exp(-8 * dt));
+    s.boardPos.copy(s.position);
+    s.boardHeading = s.heading;
+    s.boardRoll = s.roll;
+    s.boardPitch = s.pitch;
+
+    return sample;
+  }
+
+  /**
+   * Snaps surfer cleanly into the active lineup ready position when a pre-heat cutscene completes or is skipped.
+   */
+  public finishCutsceneToLineup() {
+    const s = this.state;
+    const startX = -1.5;
+    const startZ = -18.0;
+    this.waveParams.waveCenterZ = -78;
+    this.waveParams.breakX = -15;
+    const sample = sampleSurfWave(startX, startZ, this.waveParams);
+    const beachY = getBeachHeightAt(startX, startZ);
+
+    s.position.set(startX, Math.max(beachY + 0.08, sample.height + 0.03), startZ);
+    s.velocity.set(0, 0, 0);
+    s.heading = Math.PI;
+    s.roll = 0;
+    s.pitch = 0;
+    s.boardNormal.copy(sample.normal);
+    s.boardPos.copy(s.position);
+    s.boardHeading = Math.PI;
+    s.boardRoll = 0;
+    s.boardPitch = 0;
+    s.boardDetached = false;
+    s.phase = 'paddling';
+    s.speed = 0;
+    s.balance = 0;
+    s.stability = 1.0;
+    s.catchProgress = 0;
+    s.isBigBarrelWave = this.waveParams.waveHeight >= 3.2;
+    this.triggerCallout('In the lineup — reach 50 km/h to drop in', null);
+  }
+
   public step(
     rawDt: number,
     input: SurfInputState,
@@ -645,12 +801,24 @@ export class SurfPhysicsEngine {
       wp.breakX = s.position.x - wp.breakDir * 14;
     }
 
-    if (s.combo > 1 && s.phase !== 'barrel' && s.phase !== 'maneuver') {
+    if (s.combo > 1 && s.phase !== 'barrel' && s.phase !== 'maneuver' && s.phase !== 'airborne') {
       s.comboTimer -= dt * 0.14;
       if (s.comboTimer <= 0) {
         s.combo = 1;
         s.comboTimer = 0;
       }
+    }
+
+    if (this.sequenceWindowTimer > 0 && s.phase !== 'maneuver' && s.phase !== 'airborne' && s.phase !== 'barrel') {
+      this.sequenceWindowTimer -= dt;
+      if (this.sequenceWindowTimer <= 0) {
+        this.resetSequenceState();
+      }
+    }
+
+    if (s.landingCompression > 0 && s.phase !== 'airborne') {
+      s.landingCompression *= Math.exp(-6.5 * dt);
+      if (s.landingCompression < 0.01) s.landingCompression = 0;
     }
 
     const waveSample = sampleSurfWave(s.position.x, s.position.z, wp);
@@ -987,6 +1155,10 @@ export class SurfPhysicsEngine {
         s.takeoffTimer = 0;
         s.balance = 0;
         s.stability = 1.0;
+        s.landingCompression = 0;
+        this.balanceVel = 0;
+        this.prevSteerInput = 0;
+        this.resetSequenceState();
         s.targetTimeScale = 0.42;
         s.velocity.z = Math.max(s.velocity.z, wp.waveSpeed * 0.94);
         s.velocity.x += wp.breakDir * 3.1;
@@ -1114,6 +1286,8 @@ export class SurfPhysicsEngine {
 
     const steerInput = input.moveX;
     const trimInput = input.moveY;
+    const steerDelta = THREE.MathUtils.clamp((steerInput - this.prevSteerInput) / Math.max(dt, 0.008), -12, 12);
+    this.prevSteerInput = steerInput;
 
     const turnRate = (3.55 - Math.min(0.8, s.speed * 0.03)) * steerInput;
     s.heading -= turnRate * dt;
@@ -1121,11 +1295,11 @@ export class SurfPhysicsEngine {
     const dirX = Math.sin(s.heading);
     const dirZ = Math.cos(s.heading);
 
-    // Smooth carving pump & wave-pocket sustain for organic flow down the line
+    // Smooth carving pump & wave-pocket sustain + carried sequence flow momentum
     const pocketBonus =
       sample.section === 'pocket' ? 5.8 : sample.section === 'face' ? 3.1 : 1.6;
     const gravityPush = 15.8 * sample.slopeSteepness * Math.max(-0.3, dirZ * 0.8 + 0.3);
-    const pumpGain = Math.abs(steerInput) * 2.1 + pocketBonus;
+    const pumpGain = Math.abs(steerInput) * 2.1 + pocketBonus + this.flowMomentumBonus * 6.5;
     const trimBoost = -trimInput * 2.15;
 
     const turnDrag = Math.abs(steerInput) * 0.14;
@@ -1134,7 +1308,8 @@ export class SurfPhysicsEngine {
 
     s.speed += (gravityPush + pumpGain + trimBoost - waterDrag - whitewaterDrag) * dt;
     const minWaveMatch = wp.waveSpeed * (sample.section === 'flat' ? 0.32 : 0.82);
-    s.speed = THREE.MathUtils.clamp(s.speed, Math.max(4.0, minWaveMatch * 0.65), 22.5);
+    s.speed = THREE.MathUtils.clamp(s.speed, Math.max(4.0, minWaveMatch * 0.65), 22.8);
+    this.flowMomentumBonus *= Math.exp(-2.8 * dt);
 
     const targetVx = dirX * s.speed;
     const targetVz = dirZ * s.speed + (sample.section !== 'flat' ? wp.waveSpeed * 0.26 : 0);
@@ -1157,9 +1332,14 @@ export class SurfPhysicsEngine {
     );
     s.boardNormal.lerp(contact.blendedNormal, 1 - Math.exp(-16 * dt));
 
-    const targetRoll = THREE.MathUtils.clamp(steerInput * 0.62 + s.balance * 0.24, -0.82, 0.82);
+    const targetRoll = THREE.MathUtils.clamp(steerInput * 0.64 + s.balance * 0.24, -0.84, 0.84);
     s.roll = THREE.MathUtils.damp(s.roll, targetRoll, 10.5, dt);
-    s.pitch = THREE.MathUtils.damp(s.pitch, dirZ * 0.06 - trimInput * 0.04, 10, dt);
+    s.pitch = THREE.MathUtils.damp(
+      s.pitch,
+      dirZ * 0.06 - trimInput * 0.04 + s.landingCompression * 0.05,
+      10,
+      dt
+    );
 
     const nextSample = contact.centerSample;
 
@@ -1175,22 +1355,33 @@ export class SurfPhysicsEngine {
       this.sprayImpactCooldown = 0.95;
     }
 
-    // Balance, speed wobble & breaking-section impact physics
+    // Second-order weight & board-edge balance physics (feels connected & weighty, never snappy)
     const isWhitewater = nextSample.section === 'whitewater';
+    const isSteepLipOrBarrel = nextSample.section === 'lip' || nextSample.inBarrelZone;
+    const speedRatio = Math.pow(THREE.MathUtils.clamp(s.speed / 18.0, 0.2, 1.35), 1.25);
+    const slopeFactor = 0.68 + nextSample.slopeSteepness * 0.65;
+
     const turbulence = isWhitewater
-      ? Math.sin(wp.simTime * 10.5) * 0.85 + 0.32 * wp.breakDir
-      : 0;
+      ? Math.sin(wp.simTime * 10.5) * 2.4 + 0.95 * wp.breakDir
+      : isSteepLipOrBarrel
+        ? Math.sin(wp.simTime * 8.2) * 0.45
+        : 0;
     const speedWobble =
-      s.speed > 19.0 && Math.abs(steerInput) > 0.78
-        ? Math.sin(wp.simTime * 14.5) * ((s.speed - 18.8) * 0.22)
+      s.speed > 19.0 && Math.abs(steerInput) > 0.75
+        ? Math.sin(wp.simTime * 14.5) * ((s.speed - 18.6) * 0.65)
         : 0;
 
-    const carveTorque = steerInput * (s.speed / 19.5) * 0.36;
-    const balanceForce = carveTorque + turbulence + speedWobble + input.balanceAdjust * 2.05;
-    s.balance += balanceForce * dt;
-    const stabilizeDamp = input.balanceStabilize ? 3.8 : 1.15;
-    s.balance *= Math.exp(-stabilizeDamp * dt);
-    s.balance = THREE.MathUtils.clamp(s.balance, -1.25, 1.25);
+    // Centrifugal carve force + rail-to-rail snap transfer
+    const carveTorque = steerInput * speedRatio * slopeFactor * 1.15;
+    const snapTorque = steerDelta * speedRatio * 0.065;
+    const totalBalanceForce =
+      carveTorque + snapTorque + turbulence + speedWobble + input.balanceAdjust * 5.2;
+
+    const centeringSpring = input.balanceStabilize ? 5.6 : 1.75;
+    const balanceDamp = input.balanceStabilize ? 5.4 : 3.2;
+    const balanceAcc = totalBalanceForce - s.balance * centeringSpring - this.balanceVel * balanceDamp;
+    this.balanceVel = THREE.MathUtils.clamp(this.balanceVel + balanceAcc * dt, -3.5, 3.5);
+    s.balance = THREE.MathUtils.clamp(s.balance + this.balanceVel * dt, -1.25, 1.25);
 
     if (isWhitewater) {
       this.whitewaterExposure += dt;
@@ -1208,10 +1399,15 @@ export class SurfPhysicsEngine {
       this.whitewaterExposure = Math.max(0, this.whitewaterExposure - dt * 1.6);
     }
 
-    if (Math.abs(s.balance) > 0.90) {
-      s.stability = Math.max(0, s.stability - dt * 0.68);
+    // Natural stability recovery when riding smoothly inside the sweet spot
+    if (Math.abs(s.balance) > 0.88) {
+      const overFactor = (Math.abs(s.balance) - 0.88) / 0.37;
+      s.stability = Math.max(0, s.stability - dt * (0.48 + overFactor * 0.45));
+    } else if (Math.abs(s.balance) < 0.45 && Math.abs(this.balanceVel) < 0.65) {
+      const calmBoost = input.balanceStabilize ? 0.95 : 0.72;
+      s.stability = Math.min(1, s.stability + dt * calmBoost);
     } else {
-      s.stability = Math.min(1, s.stability + dt * 0.62);
+      s.stability = Math.min(1, s.stability + dt * 0.34);
     }
 
     if (s.stability <= 0.05) {
@@ -1279,53 +1475,165 @@ export class SurfPhysicsEngine {
         s.splashIntensity = 0.85;
         s.impactEventIntensity = Math.max(s.impactEventIntensity, 0.45);
         s.impactWhitewater = 0.42;
+
+        // Exiting a barrel opens a high-energy sequence window for Tube -> Air/Cutback/Floater!
+        this.sequenceWindowTimer = 2.8;
+        this.lastExitedBarrel = true;
+        this.flowMomentumBonus = Math.min(0.35, this.flowMomentumBonus + 0.24);
+        s.sequenceChain = Math.max(1, s.sequenceChain);
+        s.sequenceTag = 'Barrel Spit-Out';
+        s.sequenceTier = Math.max(s.sequenceTier, 2);
+
         this.triggerCallout(`Spit Out · +${pts}`, 'Perfect');
       }
     }
 
-    if (input.requestedManeuver && this.cooldownTimer <= 0) {
+    if (this.queuedManeuver && this.cooldownTimer <= 0) {
+      const next = this.queuedManeuver;
+      this.queuedManeuver = null;
+      this.attemptManeuver(next, nextSample);
+    } else if (input.requestedManeuver && this.cooldownTimer <= 0) {
       this.attemptManeuver(input.requestedManeuver, nextSample);
     }
     void sample;
   }
 
+  private getManeuverBit(type: ManeuverType): number {
+    return type === 'bottomTurn' ? 1 : type === 'cutback' ? 2 : type === 'floater' ? 4 : 8;
+  }
+
+  private countBits(mask: number): number {
+    let n = 0;
+    let m = mask;
+    while (m > 0) {
+      n += m & 1;
+      m >>= 1;
+    }
+    return n;
+  }
+
   private attemptManeuver(type: ManeuverType, sample: WaveSample) {
     const s = this.state;
+    const wp = this.waveParams;
     const speed = s.speed;
     const balPenalty = Math.abs(s.balance);
+
+    // Direction & velocity flow synergy relative to wave break direction
+    const alongLineDir = Math.sin(s.heading) * wp.breakDir; // + = down the line, - = back toward curl
+    const climbingFace = Math.cos(s.heading) < 0.42; // angled up or across face rather than straight shoreward
+    const inActiveSequence = this.sequenceWindowTimer > 0 && (this.lastManeuverType !== null || this.lastExitedBarrel);
+
+    // Detect consecutive repetition of the exact same maneuver (anti-spam)
+    const isRepeat = inActiveSequence && this.lastManeuverType === type;
+    if (isRepeat) {
+      this.repeatSameCount += 1;
+    } else {
+      this.repeatSameCount = 0;
+    }
+
+    // Evaluate connection tier & flow synergy from previous maneuver + current velocity/direction
+    let flowBonusMetric = 0;
+    let sequenceMult = 1.0;
+    let transitionTier = 0;
+    let connectionName = '';
+
+    if (inActiveSequence && !isRepeat) {
+      const prev = this.lastManeuverType;
+      if (this.lastExitedBarrel && (type === 'air' || type === 'cutback' || type === 'floater')) {
+        flowBonusMetric = 0.14;
+        sequenceMult = 1.5;
+        transitionTier = 3;
+        connectionName = type === 'air' ? 'Tube → Aerial' : type === 'cutback' ? 'Tube → Cutback' : 'Tube → Floater';
+      } else if (prev === 'bottomTurn' && type === 'air') {
+        flowBonusMetric = climbingFace ? 0.16 : 0.08;
+        sequenceMult = 1.4;
+        transitionTier = 2;
+        connectionName = 'Bottom Turn → Aerial';
+      } else if (prev === 'bottomTurn' && type === 'floater') {
+        flowBonusMetric = climbingFace ? 0.14 : 0.07;
+        sequenceMult = 1.32;
+        transitionTier = 2;
+        connectionName = 'Bottom Turn → Floater';
+      } else if (prev === 'bottomTurn' && type === 'cutback') {
+        flowBonusMetric = 0.12;
+        sequenceMult = 1.24;
+        transitionTier = 1;
+        connectionName = 'Bottom Turn → Cutback';
+      } else if (prev === 'cutback' && type === 'bottomTurn') {
+        flowBonusMetric = 0.11;
+        sequenceMult = 1.22;
+        transitionTier = 1;
+        connectionName = 'Cutback → Bottom Turn';
+      } else if (prev === 'cutback' && (type === 'floater' || type === 'air')) {
+        flowBonusMetric = 0.12;
+        sequenceMult = 1.35;
+        transitionTier = 2;
+        connectionName = type === 'air' ? 'Cutback → Aerial' : 'Cutback → Floater';
+      } else if (prev === 'floater' && (type === 'cutback' || type === 'bottomTurn')) {
+        flowBonusMetric = 0.10;
+        sequenceMult = 1.28;
+        transitionTier = 2;
+        connectionName = type === 'cutback' ? 'Floater → Cutback' : 'Floater → Bottom Turn';
+      } else if (prev === 'air' && (type === 'bottomTurn' || type === 'cutback')) {
+        flowBonusMetric = 0.10;
+        sequenceMult = 1.38;
+        transitionTier = 3;
+        connectionName = type === 'cutback' ? 'Aerial → Cutback' : 'Aerial → Bottom Turn';
+      } else {
+        flowBonusMetric = 0.06;
+        sequenceMult = 1.15;
+        transitionTier = 1;
+      }
+    }
+
+    // Direction synergy bonus based on surfer velocity & heading into the maneuver
+    let directionSynergy = 0;
+    if (type === 'bottomTurn' && sample.faceProgress < 0.6) {
+      directionSynergy = alongLineDir > 0.15 ? 0.06 : 0.02;
+    } else if (type === 'cutback' && alongLineDir > 0.2) {
+      // Carving from down-the-line back into the power pocket
+      directionSynergy = 0.07;
+    } else if ((type === 'floater' || type === 'air') && climbingFace) {
+      // Projecting up toward the lip with speed
+      directionSynergy = 0.07;
+    }
 
     let scoreMetric = 0;
 
     if (type === 'bottomTurn') {
       const inLowerFace = sample.faceProgress < 0.62;
-      if (speed < 6.0) {
+      if (speed < 5.8) {
         this.failManeuver(type, 'Too slow for Bottom Turn');
         return;
       }
       scoreMetric =
-        (inLowerFace ? 0.45 : 0.20) +
-        THREE.MathUtils.clamp((speed - 6.0) / 8.0, 0, 0.35) +
-        (1 - balPenalty) * 0.25;
-      s.maneuverDuration = 0.95;
+        (inLowerFace ? 0.45 : 0.22) +
+        THREE.MathUtils.clamp((speed - 5.8) / 8.0, 0, 0.34) +
+        (1 - balPenalty) * 0.24 +
+        flowBonusMetric +
+        directionSynergy;
+      s.maneuverDuration = 0.92;
     } else if (type === 'cutback') {
       const onOpenFace =
         sample.section === 'shoulder' || sample.section === 'face' || sample.section === 'pocket';
-      if (!onOpenFace || speed < 6.8) {
+      if (!onOpenFace || speed < 6.6) {
         this.failManeuver(
           type,
-          speed < 6.8 ? 'Need more speed for Cutback' : 'Wrong section for Cutback'
+          speed < 6.6 ? 'Need more speed for Cutback' : 'Wrong section for Cutback'
         );
         return;
       }
       scoreMetric =
-        (sample.section === 'shoulder' || sample.section === 'face' ? 0.45 : 0.25) +
-        THREE.MathUtils.clamp((speed - 6.8) / 9.0, 0, 0.35) +
-        (1 - balPenalty) * 0.25;
-      s.maneuverDuration = 1.1;
+        (sample.section === 'shoulder' || sample.section === 'face' ? 0.45 : 0.26) +
+        THREE.MathUtils.clamp((speed - 6.6) / 9.0, 0, 0.34) +
+        (1 - balPenalty) * 0.24 +
+        flowBonusMetric +
+        directionSynergy;
+      s.maneuverDuration = 1.08;
     } else if (type === 'floater') {
       const nearLip =
-        sample.section === 'lip' || sample.section === 'whitewater' || sample.faceProgress > 0.50;
-      if (!nearLip || speed < 6.4) {
+        sample.section === 'lip' || sample.section === 'whitewater' || sample.faceProgress > 0.48;
+      if (!nearLip || speed < 6.2) {
         this.failManeuver(
           type,
           !nearLip ? 'Must hit the breaking lip' : 'Insufficient speed for Floater'
@@ -1333,25 +1641,35 @@ export class SurfPhysicsEngine {
         return;
       }
       scoreMetric =
-        (sample.section === 'lip' ? 0.5 : 0.3) +
-        THREE.MathUtils.clamp((speed - 6.4) / 8.5, 0, 0.3) +
-        (1 - balPenalty) * 0.25;
-      s.maneuverDuration = 1.05;
+        (sample.section === 'lip' ? 0.48 : 0.30) +
+        THREE.MathUtils.clamp((speed - 6.2) / 8.5, 0, 0.30) +
+        (1 - balPenalty) * 0.24 +
+        flowBonusMetric +
+        directionSynergy;
+      s.maneuverDuration = 1.02;
     } else if (type === 'air') {
       const atLaunchLip =
-        sample.section === 'lip' || sample.section === 'pocket' || sample.faceProgress > 0.54;
-      if (!atLaunchLip || speed < 8.4) {
+        sample.section === 'lip' || sample.section === 'pocket' || sample.faceProgress > 0.52;
+      if (!atLaunchLip || speed < 8.2) {
         this.failManeuver(
           type,
-          speed < 8.4 ? 'Need high speed to launch Air' : 'Launch from the upper lip'
+          speed < 8.2 ? 'Need high speed to launch Air' : 'Launch from the upper lip'
         );
         return;
       }
       scoreMetric =
-        (sample.section === 'lip' ? 0.48 : 0.32) +
-        THREE.MathUtils.clamp((speed - 8.4) / 9.0, 0, 0.32) +
-        (1 - balPenalty) * 0.25;
-      s.maneuverDuration = 1.25;
+        (sample.section === 'lip' ? 0.46 : 0.32) +
+        THREE.MathUtils.clamp((speed - 8.2) / 9.0, 0, 0.32) +
+        (1 - balPenalty) * 0.24 +
+        flowBonusMetric +
+        directionSynergy;
+      s.maneuverDuration = 1.24;
+    }
+
+    // Repeating same move slightly degrades scoreMetric and cuts points to discourage spam
+    if (isRepeat) {
+      scoreMetric -= 0.15 * this.repeatSameCount;
+      this.balanceVel += (s.balance >= 0 ? 1 : -1) * 0.55;
     }
 
     let quality: ExecutionQuality = 'Basic';
@@ -1365,7 +1683,33 @@ export class SurfPhysicsEngine {
     s.inBarrel = false;
     s.executedManeuverType = type;
     s.executedManeuverQuality = quality;
-    this.cooldownTimer = 0.42;
+    this.cooldownTimer = 0.24;
+    this.queuedManeuver = null;
+
+    // Update active sequence chain & variety tracking
+    if (inActiveSequence && !isRepeat) {
+      s.sequenceChain += 1;
+      s.maxSequenceChain = Math.max(s.maxSequenceChain, s.sequenceChain);
+      this.sequenceVarietyBits |= this.getManeuverBit(type);
+      const varietyCount = this.countBits(this.sequenceVarietyBits);
+      if (varietyCount >= 3 || s.sequenceChain >= 3) {
+        transitionTier = 3;
+      }
+      s.sequenceTier = Math.max(s.sequenceTier, transitionTier);
+      s.sequenceTag =
+        varietyCount >= 3
+          ? `${connectionName} · Pro Line ×${s.sequenceChain}`
+          : connectionName || `Flow Chain ×${s.sequenceChain}`;
+    } else if (!isRepeat) {
+      s.sequenceChain = 1;
+      s.maxSequenceChain = Math.max(s.maxSequenceChain, 1);
+      this.sequenceVarietyBits = this.getManeuverBit(type);
+      s.sequenceTag = '';
+      s.sequenceTier = 0;
+    }
+    this.lastManeuverType = type;
+    this.lastExitedBarrel = false;
+    this.sequenceWindowTimer = 2.75;
 
     const slowFactor = quality === 'Perfect' ? 0.16 : quality === 'Good' ? 0.24 : 0.34;
     s.targetTimeScale = slowFactor;
@@ -1374,7 +1718,8 @@ export class SurfPhysicsEngine {
     if (type === 'air') {
       s.phase = 'airborne';
       s.airHeight = 0.05;
-      const launchBoost = quality === 'Perfect' ? 8.4 : quality === 'Good' ? 7.1 : 5.8;
+      const comboLift = flowBonusMetric > 0.1 ? 0.65 : 0;
+      const launchBoost = (quality === 'Perfect' ? 8.4 : quality === 'Good' ? 7.1 : 5.8) + comboLift;
       s.verticalVel = launchBoost;
       s.justSplashed = true;
       s.splashIntensity = 0.75;
@@ -1389,11 +1734,12 @@ export class SurfPhysicsEngine {
     const basePts =
       type === 'air' ? 420 : type === 'cutback' ? 320 : type === 'floater' ? 300 : 240;
     const mult = quality === 'Perfect' ? 1.75 : quality === 'Good' ? 1.3 : 1.0;
-    const awarded = Math.round(basePts * mult * s.combo);
+    const antiSpamFactor = isRepeat ? (this.repeatSameCount === 1 ? 0.55 : 0.3) : 1.0;
+    const awarded = Math.round(basePts * mult * s.combo * sequenceMult * antiSpamFactor);
     s.score += awarded;
     s.currentWavePoints += awarded;
     s.currentWaveManeuvers += 1;
-    if (quality === 'Good' || quality === 'Perfect') {
+    if (!isRepeat && (quality === 'Good' || quality === 'Perfect' || transitionTier >= 2)) {
       s.combo = Math.min(8, s.combo + 1);
     }
     s.comboTimer = 1.0;
@@ -1404,11 +1750,21 @@ export class SurfPhysicsEngine {
       floater: 'Floater',
       air: 'Aerial',
     };
+    const bestLabel =
+      s.sequenceChain >= 2 && transitionTier >= 2
+        ? `${connectionName} (${quality})`
+        : `${quality} ${labelMap[type]}`;
     if (awarded >= s.currentWaveBestManeuverPts) {
-      s.currentWaveBestManeuver = `${quality} ${labelMap[type]}`;
+      s.currentWaveBestManeuver = bestLabel;
       s.currentWaveBestManeuverPts = awarded;
     }
-    this.triggerCallout(`${quality} ${labelMap[type]} · +${awarded}`, quality);
+
+    const calloutMsg = isRepeat
+      ? `${labelMap[type]} (Repeat) · +${awarded}`
+      : s.sequenceChain >= 2 && transitionTier >= 2
+        ? `${quality} ${labelMap[type]} · Flow +${awarded}`
+        : `${quality} ${labelMap[type]} · +${awarded}`;
+    this.triggerCallout(calloutMsg, quality);
   }
 
   private failManeuver(type: ManeuverType, reason: string) {
@@ -1421,7 +1777,7 @@ export class SurfPhysicsEngine {
     };
 
     // Wrong maneuver while already unstable triggers a natural fall
-    if (s.stability < 0.45 || Math.abs(s.balance) > 0.65) {
+    if (s.stability < 0.42 || Math.abs(s.balance) > 0.68) {
       this.triggerWipeout(
         `${labelMap[type]} Mistimed`,
         type === 'floater' || type === 'air' ? 'backward' : 'sideways',
@@ -1431,13 +1787,16 @@ export class SurfPhysicsEngine {
       return;
     }
 
-    s.balance += (s.balance >= 0 ? 1 : -1) * 0.44;
-    s.stability = Math.max(0.22, s.stability - 0.28);
-    s.speed = Math.max(4.2, s.speed * 0.85);
+    const kickDir = s.balance >= 0 ? 1 : -1;
+    this.balanceVel += kickDir * 1.45;
+    s.balance = THREE.MathUtils.clamp(s.balance + kickDir * 0.24, -1.2, 1.2);
+    s.stability = Math.max(0.24, s.stability - 0.24);
+    s.speed = Math.max(4.2, s.speed * 0.86);
     s.combo = 1;
+    this.resetSequenceState();
     s.failedManeuver = true;
     s.impactEventIntensity = 0.28;
-    this.cooldownTimer = 0.5;
+    this.cooldownTimer = 0.45;
     this.triggerCallout(`Failed ${labelMap[type]} — ${reason}`, 'Failed');
   }
 
@@ -1447,20 +1806,29 @@ export class SurfPhysicsEngine {
     s.maneuverTimer += dt;
     const t = THREE.MathUtils.clamp(s.maneuverTimer / s.maneuverDuration, 0, 1);
 
-    // Turning hard or neglecting balance during maneuver shifts stability dynamically
+    // Buffer a follow-up maneuver during the final third of the current maneuver for seamless chaining
+    if (t >= 0.66 && input.requestedManeuver && input.requestedManeuver !== s.activeManeuver) {
+      this.queuedManeuver = input.requestedManeuver;
+    }
+
+    // Turning hard or riding difficult lip/cutback arcs challenges stability organically
     const drift =
       s.activeManeuver === 'cutback'
-        ? Math.sin(t * Math.PI) * 0.25 * -wp.breakDir
+        ? Math.sin(t * Math.PI) * 0.75 * -wp.breakDir
         : s.activeManeuver === 'bottomTurn'
-          ? Math.sin(t * Math.PI) * 0.22 * wp.breakDir
-          : 0;
-    s.balance = THREE.MathUtils.clamp(
-      s.balance + (drift + input.balanceAdjust * 1.75) * dt,
-      -1.2,
-      1.2
-    );
-    if (input.balanceStabilize) {
-      s.balance *= Math.exp(-2.6 * dt);
+          ? Math.sin(t * Math.PI) * 0.58 * wp.breakDir
+          : Math.sin(t * Math.PI * 2) * 0.42;
+
+    const manBalanceForce = drift + input.balanceAdjust * 4.4;
+    const manDamp = input.balanceStabilize ? 5.2 : 2.8;
+    const manAcc = manBalanceForce - s.balance * 1.4 - this.balanceVel * manDamp;
+    this.balanceVel = THREE.MathUtils.clamp(this.balanceVel + manAcc * dt, -3.2, 3.2);
+    s.balance = THREE.MathUtils.clamp(s.balance + this.balanceVel * dt, -1.2, 1.2);
+
+    // Harder maneuvers introduce mild dynamic stability wear, offset by balanced control
+    const difficultyWear = s.activeManeuver === 'cutback' || s.activeManeuver === 'floater' ? 0.11 : 0.06;
+    if (Math.abs(s.balance) > 0.65) {
+      s.stability = Math.max(0.15, s.stability - difficultyWear * dt);
     }
 
     if (Math.abs(s.balance) > 1.08 && t > 0.28) {
@@ -1476,14 +1844,14 @@ export class SurfPhysicsEngine {
     if (s.activeManeuver === 'bottomTurn') {
       const targetHeading = wp.breakDir * (0.25 + Math.sin(t * Math.PI) * 0.95) - input.moveX * 0.32;
       s.heading = lerpAngle(s.heading, targetHeading, 1 - Math.exp(-8 * dt));
-      s.roll = THREE.MathUtils.damp(s.roll, -wp.breakDir * 0.76 * Math.sin(t * Math.PI), 12, dt);
-      s.speed = Math.min(20, s.speed + 2.5 * dt);
+      s.roll = THREE.MathUtils.damp(s.roll, -wp.breakDir * 0.78 * Math.sin(t * Math.PI), 12, dt);
+      s.speed = Math.min(20.5, s.speed + 2.8 * dt);
       s.carvingIntensity = 1.15;
     } else if (s.activeManeuver === 'cutback') {
       const arc = Math.sin(t * Math.PI * 1.15);
       const targetHeading = -wp.breakDir * 1.45 * arc + wp.breakDir * 0.45 - input.moveX * 0.28;
       s.heading = lerpAngle(s.heading, targetHeading, 1 - Math.exp(-7 * dt));
-      s.roll = THREE.MathUtils.damp(s.roll, wp.breakDir * 0.72 * Math.sin(t * Math.PI), 11, dt);
+      s.roll = THREE.MathUtils.damp(s.roll, wp.breakDir * 0.74 * Math.sin(t * Math.PI), 11, dt);
       s.carvingIntensity = 1.25;
     } else if (s.activeManeuver === 'floater') {
       const lift = Math.sin(t * Math.PI) * 0.55;
@@ -1522,13 +1890,29 @@ export class SurfPhysicsEngine {
       s.phase = 'riding';
       s.activeManeuver = null;
       s.targetTimeScale = 0.42;
+
+      // Carry natural carve momentum forward into the sequence window
+      if (finishedManeuver === 'bottomTurn' || finishedManeuver === 'cutback') {
+        this.flowMomentumBonus = Math.min(0.35, this.flowMomentumBonus + (s.maneuverQuality === 'Perfect' ? 0.26 : 0.16));
+      }
       if (finishedManeuver === 'floater') {
         s.impactEventIntensity = 0.45;
         s.justSplashed = true;
         s.splashIntensity = 0.7;
+        s.landingCompression = 0.65;
       }
-      if (Math.abs(s.balance) > 0.94) {
+
+      if (Math.abs(s.balance) > 0.96) {
         this.triggerWipeout('Lost Control on Exit', 'sideways', 0.74, s.balance >= 0 ? 1 : -1);
+        return;
+      }
+
+      // Immediately execute buffered chain maneuver if queued cleanly!
+      if (this.queuedManeuver) {
+        const queued = this.queuedManeuver;
+        this.queuedManeuver = null;
+        this.cooldownTimer = 0;
+        this.attemptManeuver(queued, contact.centerSample);
       }
     }
   }
@@ -1541,16 +1925,19 @@ export class SurfPhysicsEngine {
     s.verticalVel -= 11.8 * dt;
     s.airHeight += s.verticalVel * dt;
 
+    // Allow buffering a landing follow-up carve (cutback / bottomTurn) on descent
+    if (s.verticalVel < 0 && s.airHeight < 1.15 && input.requestedManeuver && input.requestedManeuver !== 'air') {
+      this.queuedManeuver = input.requestedManeuver;
+    }
+
     const spinRate = s.maneuverQuality === 'Perfect' ? Math.PI * 2.0 : Math.PI * 1.1;
     s.maneuverSpin = Math.min(Math.PI * 2, s.maneuverSpin + spinRate * dt);
-    s.balance = THREE.MathUtils.clamp(
-      s.balance + input.moveX * 0.45 * dt + input.balanceAdjust * 1.6 * dt,
-      -1.2,
-      1.2
-    );
-    if (input.balanceStabilize) {
-      s.balance *= Math.exp(-2.4 * dt);
-    }
+
+    const airBalanceForce = input.moveX * 1.3 + input.balanceAdjust * 4.2;
+    const airDamp = input.balanceStabilize ? 5.0 : 2.6;
+    const airAcc = airBalanceForce - s.balance * 1.1 - this.balanceVel * airDamp;
+    this.balanceVel = THREE.MathUtils.clamp(this.balanceVel + airAcc * dt, -3.0, 3.0);
+    s.balance = THREE.MathUtils.clamp(s.balance + this.balanceVel * dt, -1.2, 1.2);
 
     const dirX = Math.sin(s.heading);
     const dirZ = Math.cos(s.heading);
@@ -1577,7 +1964,7 @@ export class SurfPhysicsEngine {
       s.splashIntensity = 1.15;
       s.targetTimeScale = 0.42;
 
-      if (Math.abs(s.balance) > 0.76 || waterUnder.section === 'flat') {
+      if (Math.abs(s.balance) > 0.80 || waterUnder.section === 'flat') {
         this.triggerWipeout(
           waterUnder.section === 'flat' ? 'Flat Water Slam' : 'Rough Air Landing',
           'forward',
@@ -1587,9 +1974,22 @@ export class SurfPhysicsEngine {
       } else {
         s.phase = 'riding';
         s.activeManeuver = null;
-        s.speed = Math.min(21, s.speed * 1.08);
+        s.speed = Math.min(21.5, s.speed * 1.08);
+        s.landingCompression = THREE.MathUtils.clamp(0.65 + s.speed / 40, 0.65, 1.0);
+        // Slightly off-center landings induce a realistic recoverable wobble instead of instant fall
+        if (Math.abs(s.balance) > 0.52) {
+          this.balanceVel += (s.balance >= 0 ? 1 : -1) * 1.35;
+          s.stability = Math.max(0.28, s.stability - 0.18);
+        }
         s.impactEventIntensity = 0.54; // Medium splash impact on clean air landing
         s.impactWhitewater = 0.28;
+
+        if (this.queuedManeuver) {
+          const queued = this.queuedManeuver;
+          this.queuedManeuver = null;
+          this.cooldownTimer = 0;
+          this.attemptManeuver(queued, waterUnder);
+        }
       }
     }
     void sample;
@@ -1609,6 +2009,7 @@ export class SurfPhysicsEngine {
     s.fallDir = fallDir >= 0 ? 1 : -1;
     s.fallIntensity = THREE.MathUtils.clamp(intensity, 0.35, 1.0);
     s.submersionDepth = 0;
+    s.landingCompression = 0;
     s.activeManeuver = null;
     s.inBarrel = false;
     s.combo = 1;
@@ -1616,6 +2017,8 @@ export class SurfPhysicsEngine {
     s.targetTimeScale = 0.72;
     s.slowMoHoldTimer = 0.42;
     this.whitewaterExposure = 0;
+    this.balanceVel = 0;
+    this.resetSequenceState();
 
     // Separate the surfboard from the surfer cleanly!
     s.boardDetached = true;

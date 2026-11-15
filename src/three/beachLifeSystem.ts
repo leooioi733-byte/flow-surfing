@@ -5,7 +5,13 @@ import { getBeachHeightAt } from './oceanShader';
 export interface BeachLifeSystem {
   group: THREE.Group;
   setConfig: (atmosphere: BeachAtmosphere, theme: BeachTheme) => void;
-  update: (time: number, windStrength: number) => {
+  update: (
+    time: number,
+    windStrength: number,
+    dt?: number,
+    camZ?: number,
+    underwaterAmount?: number
+  ) => {
     volleyballHitPulse: boolean;
   };
   dispose: () => void;
@@ -660,6 +666,7 @@ export function createBeachLifeSystem(): BeachLifeSystem {
   let currentAtmosphere: BeachAtmosphere = 'Lively';
   let currentTheme: BeachTheme = 'Tropical';
   let lastRallyHalf = -1;
+  let distantAccum = 0;
 
   const setConfig = (atmosphere: BeachAtmosphere, theme: BeachTheme) => {
     if (atmosphere !== currentAtmosphere) {
@@ -700,7 +707,19 @@ export function createBeachLifeSystem(): BeachLifeSystem {
   return {
     group,
     setConfig,
-    update: (time, windStrength) => {
+    update: (time, windStrength, dt = 0.016, camZ = 10, underwaterAmount = 0) => {
+      if (underwaterAmount > 0.35) {
+        return { volleyballHitPulse: false };
+      }
+      if (camZ < -8) {
+        distantAccum += dt;
+        if (distantAccum < 0.065) {
+          return { volleyballHitPulse: false };
+        }
+        distantAccum = 0;
+      } else {
+        distantAccum = 0;
+      }
       let volleyballHitPulse = false;
 
       // 1. Lifeguard flag flutter

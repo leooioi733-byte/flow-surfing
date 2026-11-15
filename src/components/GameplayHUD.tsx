@@ -5,6 +5,7 @@ import {
   Cloud,
   CloudRain,
   Eye,
+  EyeOff,
   Film,
   Pause,
   Play,
@@ -247,6 +248,7 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
   const [knobPos, setKnobPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [joyActive, setJoyActive] = useState(false);
   const [calloutVisible, setCalloutVisible] = useState(false);
+  const [replayMenuHidden, setReplayMenuHidden] = useState(false);
 
   // Fade maneuver feedback smoothly after calloutId updates
   useEffect(() => {
@@ -256,8 +258,11 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
     return () => window.clearTimeout(timer);
   }, [hud.calloutId, hud.lastCallout]);
 
-  // Reset joystick cleanly if replay opens or game pauses while stick is held
+  // Reset joystick & replay HUD visibility cleanly when replay closes or game pauses
   useEffect(() => {
+    if (!hud.replay.active) {
+      setReplayMenuHidden(false);
+    }
     if (hud.isPaused || hud.replay.active) {
       if (joyPointerId.current !== null) {
         joyPointerId.current = null;
@@ -379,64 +384,93 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
           onPointerDown={(e) => e.stopPropagation()}
           className="relative flex items-center justify-between gap-3"
         >
-          <div className="pointer-events-auto flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={onExitReplay}
-              className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/15 bg-[#071726]/75 px-3 text-xs font-medium text-white transition-colors hover:border-white/30 hover:bg-[#071726]/90"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              <span>Back to Surf</span>
-            </button>
+          {!replayMenuHidden ? (
+            <>
+              <div className="pointer-events-auto flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={onExitReplay}
+                  className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/15 bg-[#071726]/75 px-3 text-xs font-medium text-white transition-colors hover:border-white/30 hover:bg-[#071726]/90"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  <span>Back to Surf</span>
+                </button>
 
-            <div className="hidden sm:flex items-center gap-2 text-xs text-[#E7DCC8]/85">
-              <span className="font-medium tracking-wide text-white">15s Replay</span>
-              <span aria-hidden="true" className="text-white/40">·</span>
-              <span className="font-mono-tabular">Wave {hud.waveNumber}</span>
-              <span aria-hidden="true" className="text-white/40">·</span>
-              <span className="font-mono-tabular">{hud.speedKmh} km/h</span>
-            </div>
-          </div>
+                <div className="hidden sm:flex items-center gap-2 text-xs text-[#E7DCC8]/85">
+                  <span className="font-medium tracking-wide text-white">15s Replay</span>
+                  <span aria-hidden="true" className="text-white/40">·</span>
+                  <span className="font-mono-tabular">Wave {hud.waveNumber}</span>
+                  <span aria-hidden="true" className="text-white/40">·</span>
+                  <span className="font-mono-tabular">{hud.speedKmh} km/h</span>
+                </div>
+              </div>
 
-          <div className="flex flex-col items-center text-center">
-            {hud.lastCallout && (
-              <span
-                className={`font-display text-xs font-semibold tracking-[0.08em] sm:text-sm ${qualityTextColor}`}
-                style={{ textShadow: '0 2px 12px rgba(7, 23, 38, 0.85)' }}
-              >
-                {hud.lastCallout}
-              </span>
-            )}
-          </div>
+              <div className="flex flex-col items-center text-center">
+                {hud.lastCallout && (
+                  <span
+                    className={`font-display text-xs font-semibold tracking-[0.08em] sm:text-sm ${qualityTextColor}`}
+                    style={{ textShadow: '0 2px 12px rgba(7, 23, 38, 0.85)' }}
+                  >
+                    {hud.lastCallout}
+                  </span>
+                )}
+              </div>
 
-          <div className="pointer-events-auto flex items-center gap-2">
-            {hud.cameraModified && (
+              <div className="pointer-events-auto flex items-center gap-2">
+                {hud.cameraModified && (
+                  <button
+                    type="button"
+                    onClick={onResetCamera}
+                    aria-label="Center camera"
+                    title="Centralizar Câmera (H)"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-[#071726]/70 text-white/85 transition-colors hover:border-white/30 hover:bg-[#071726]/90"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5 text-[#E7DCC8]" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onToggleAudio}
+                  aria-label={audioEnabled ? 'Mute ocean audio' : 'Enable ocean audio'}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-[#071726]/70 text-white/85 transition-colors hover:border-white/30 hover:bg-[#071726]/90"
+                >
+                  {audioEnabled ? (
+                    <Volume2 className="h-4 w-4 text-[#2596A6]" />
+                  ) : (
+                    <VolumeX className="h-4 w-4 text-white/65" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReplayMenuHidden(true)}
+                  aria-label="Hide replay menu"
+                  title="Esconder menu do replay"
+                  className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/15 bg-[#071726]/70 px-2.5 text-xs font-medium text-white/85 transition-colors hover:border-white/30 hover:bg-[#071726]/90"
+                >
+                  <EyeOff className="h-3.5 w-3.5 text-[#E7DCC8]" />
+                  <span className="hidden sm:inline">Hide Menu</span>
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div aria-hidden="true" />
               <button
                 type="button"
-                onClick={onResetCamera}
-                aria-label="Center camera"
-                title="Centralizar Câmera (H)"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-[#071726]/70 text-white/85 transition-colors hover:border-white/30 hover:bg-[#071726]/90"
+                onClick={() => setReplayMenuHidden(false)}
+                aria-label="Show replay menu"
+                title="Mostrar menu do replay"
+                className="pointer-events-auto inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/15 bg-[#071726]/45 px-2.5 text-xs font-medium text-white/80 backdrop-blur-sm transition-colors hover:border-white/30 hover:bg-[#071726]/80 hover:text-white"
               >
-                <RotateCcw className="h-3.5 w-3.5 text-[#E7DCC8]" />
+                <Eye className="h-3.5 w-3.5 text-[#38d9c8]" />
+                <span>Show Menu</span>
               </button>
-            )}
-            <button
-              type="button"
-              onClick={onToggleAudio}
-              aria-label={audioEnabled ? 'Mute ocean audio' : 'Enable ocean audio'}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-[#071726]/70 text-white/85 transition-colors hover:border-white/30 hover:bg-[#071726]/90"
-            >
-              {audioEnabled ? (
-                <Volume2 className="h-4 w-4 text-[#2596A6]" />
-              ) : (
-                <VolumeX className="h-4 w-4 text-white/65" />
-              )}
-            </button>
-          </div>
+            </>
+          )}
         </div>
 
         {/* REPLAY BOTTOM UNIFIED CONTROL DOCK (zero viewport occlusion) */}
+        {!replayMenuHidden && (
         <div
           onPointerDown={(e) => e.stopPropagation()}
           className="pointer-events-auto mx-auto w-[min(660px,95vw)] rounded-xl border border-white/15 bg-[#071726]/82 p-3 shadow-2xl"
@@ -528,6 +562,7 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
             </div>
           </div>
         </div>
+        )}
       </div>
     );
   }
@@ -596,6 +631,20 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
               {hud.lastCallout}
             </span>
           </div>
+          {hud.sequenceChain >= 2 && hud.sequenceTag && (
+            <div
+              className={`font-mono-tabular mt-0.5 text-[11px] font-medium tracking-[0.06em] transition-opacity duration-300 ${
+                hud.sequenceTier >= 3
+                  ? 'text-[#38d9c8]'
+                  : hud.sequenceTier === 2
+                    ? 'text-[#f4c97a]'
+                    : 'text-[#E7DCC8]/85'
+              } ${calloutVisible ? 'opacity-100' : 'opacity-65'}`}
+              style={{ textShadow: '0 2px 10px rgba(7, 23, 38, 0.85)' }}
+            >
+              {hud.sequenceTag}
+            </div>
+          )}
           {hud.inBarrel && (
             <div className="font-mono-tabular mt-1 text-xs font-medium tracking-[0.14em] text-[#38d9c8]">
               BARREL · {hud.barrelTime.toFixed(1)}s

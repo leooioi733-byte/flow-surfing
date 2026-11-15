@@ -52,10 +52,56 @@ const _fpLookMat = new THREE.Matrix4();
  * with independent detached-board transforms during wipeout & swim recovery and an accurate
  * head/eye anchor for seamless first-person surfing.
  */
+export interface SurferRigOptions {
+  castShadows?: boolean;
+  shareStaticGeometries?: boolean;
+}
+
+interface SharedRigGeometries {
+  pelvis: THREE.BufferGeometry;
+  chest: THREE.BufferGeometry;
+  chestBand: THREE.BufferGeometry;
+  neck: THREE.BufferGeometry;
+  skull: THREE.BufferGeometry;
+  hair: THREE.BufferGeometry;
+  upperArm: THREE.BufferGeometry;
+  forearm: THREE.BufferGeometry;
+  hand: THREE.BufferGeometry;
+  thigh: THREE.BufferGeometry;
+  shin: THREE.BufferGeometry;
+  foot: THREE.BufferGeometry;
+}
+
+let cachedSharedGeos: SharedRigGeometries | null = null;
+
+function getSharedRigGeometries(): SharedRigGeometries {
+  if (!cachedSharedGeos) {
+    cachedSharedGeos = {
+      pelvis: new THREE.CapsuleGeometry(0.115, 0.1, 5, 10),
+      chest: new THREE.CapsuleGeometry(0.145, 0.28, 6, 12),
+      chestBand: new THREE.CylinderGeometry(0.152, 0.142, 0.11, 12),
+      neck: new THREE.CylinderGeometry(0.048, 0.055, 0.1, 8),
+      skull: new THREE.SphereGeometry(0.105, 12, 10),
+      hair: new THREE.SphereGeometry(0.11, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.62),
+      upperArm: new THREE.CapsuleGeometry(0.045, 0.22, 5, 8),
+      forearm: new THREE.CapsuleGeometry(0.038, 0.21, 5, 8),
+      hand: new THREE.SphereGeometry(0.042, 7, 7),
+      thigh: new THREE.CapsuleGeometry(0.068, 0.3, 5, 10),
+      shin: new THREE.CapsuleGeometry(0.05, 0.32, 5, 10),
+      foot: new THREE.BoxGeometry(0.085, 0.05, 0.21),
+    };
+  }
+  return cachedSharedGeos;
+}
+
 export function createSurferRig(
   initialBoard: SurfboardSpec,
-  initialProfile: SurferProfile
+  initialProfile: SurferProfile,
+  options?: SurferRigOptions
 ): SurferRig {
+  const castShadows = options?.castShadows ?? true;
+  const shareGeos = options?.shareStaticGeometries ?? false;
+  const shared = shareGeos ? getSharedRigGeometries() : null;
   const root = new THREE.Group();
 
   // Surfboard container is a sibling of characterGroup so the board can separate
@@ -63,7 +109,10 @@ export function createSurferRig(
   const boardContainer = new THREE.Group();
   root.add(boardContainer);
 
-  let boardMesh = createSurfboardGroup(initialBoard);
+  let boardMesh = createSurfboardGroup(initialBoard, {
+    castShadows,
+    lightweightMaterial: shareGeos,
+  });
   boardContainer.add(boardMesh);
 
   const characterGroup = new THREE.Group();
@@ -96,9 +145,13 @@ export function createSurferRig(
   characterGroup.add(hips);
 
   // Pelvis
-  const pelvisMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.115, 0.1, 6, 12), suitMat);
+  const pelvisMesh = new THREE.Mesh(
+    shared ? shared.pelvis : new THREE.CapsuleGeometry(0.115, 0.1, 6, 12),
+    suitMat
+  );
   pelvisMesh.rotation.z = Math.PI / 2;
-  pelvisMesh.castShadow = true;
+  pelvisMesh.castShadow = castShadows;
+  pelvisMesh.userData.sharedGeo = Boolean(shared);
   hips.add(pelvisMesh);
 
   // Torso
@@ -106,16 +159,24 @@ export function createSurferRig(
   torso.position.set(0, 0.08, 0);
   hips.add(torso);
 
-  const chestMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.145, 0.28, 8, 14), suitMat);
+  const chestMesh = new THREE.Mesh(
+    shared ? shared.chest : new THREE.CapsuleGeometry(0.145, 0.28, 8, 14),
+    suitMat
+  );
   chestMesh.position.set(0, 0.22, 0);
   chestMesh.scale.set(1.15, 1.0, 0.78);
-  chestMesh.castShadow = true;
+  chestMesh.castShadow = castShadows;
+  chestMesh.userData.sharedGeo = Boolean(shared);
   torso.add(chestMesh);
 
   // Wetsuit chest stripe accent
-  const chestBand = new THREE.Mesh(new THREE.CylinderGeometry(0.152, 0.142, 0.11, 14), accentMat);
+  const chestBand = new THREE.Mesh(
+    shared ? shared.chestBand : new THREE.CylinderGeometry(0.152, 0.142, 0.11, 14),
+    accentMat
+  );
   chestBand.position.set(0, 0.29, 0);
   chestBand.scale.set(1.12, 1.0, 0.78);
+  chestBand.userData.sharedGeo = Boolean(shared);
   torso.add(chestBand);
 
   // Head & Neck
@@ -123,22 +184,33 @@ export function createSurferRig(
   head.position.set(0, 0.45, 0);
   torso.add(head);
 
-  const neckMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.055, 0.1, 10), skinMat);
+  const neckMesh = new THREE.Mesh(
+    shared ? shared.neck : new THREE.CylinderGeometry(0.048, 0.055, 0.1, 10),
+    skinMat
+  );
   neckMesh.position.y = 0.04;
+  neckMesh.userData.sharedGeo = Boolean(shared);
   head.add(neckMesh);
 
-  const skullMesh = new THREE.Mesh(new THREE.SphereGeometry(0.105, 16, 14), skinMat);
+  const skullMesh = new THREE.Mesh(
+    shared ? shared.skull : new THREE.SphereGeometry(0.105, 16, 14),
+    skinMat
+  );
   skullMesh.position.y = 0.16;
   skullMesh.scale.set(0.92, 1.08, 0.98);
-  skullMesh.castShadow = true;
+  skullMesh.castShadow = castShadows;
+  skullMesh.userData.sharedGeo = Boolean(shared);
   head.add(skullMesh);
 
   const hairMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(0.11, 14, 12, 0, Math.PI * 2, 0, Math.PI * 0.62),
+    shared
+      ? shared.hair
+      : new THREE.SphereGeometry(0.11, 14, 12, 0, Math.PI * 2, 0, Math.PI * 0.62),
     hairMat
   );
   hairMesh.position.set(0, 0.17, -0.01);
   hairMesh.rotation.x = -0.18;
+  hairMesh.userData.sharedGeo = Boolean(shared);
   head.add(hairMesh);
 
   // Exact eye-bridge anchor inside head coordinate frame for clip-free 1P camera
@@ -152,23 +224,35 @@ export function createSurferRig(
     shoulder.position.set(side * 0.2, 0.36, 0);
     torso.add(shoulder);
 
-    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.22, 6, 10), suitMat);
+    const upperArm = new THREE.Mesh(
+      shared ? shared.upperArm : new THREE.CapsuleGeometry(0.045, 0.22, 6, 10),
+      suitMat
+    );
     upperArm.position.y = -0.13;
-    upperArm.castShadow = true;
+    upperArm.castShadow = castShadows;
+    upperArm.userData.sharedGeo = Boolean(shared);
     shoulder.add(upperArm);
 
     const elbow = new THREE.Group();
     elbow.position.set(0, -0.26, 0);
     shoulder.add(elbow);
 
-    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.038, 0.21, 6, 10), skinMat);
+    const forearm = new THREE.Mesh(
+      shared ? shared.forearm : new THREE.CapsuleGeometry(0.038, 0.21, 6, 10),
+      skinMat
+    );
     forearm.position.y = -0.12;
-    forearm.castShadow = true;
+    forearm.castShadow = castShadows;
+    forearm.userData.sharedGeo = Boolean(shared);
     elbow.add(forearm);
 
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.042, 8, 8), skinMat);
+    const hand = new THREE.Mesh(
+      shared ? shared.hand : new THREE.SphereGeometry(0.042, 8, 8),
+      skinMat
+    );
     hand.position.y = -0.25;
     hand.scale.set(0.85, 1.25, 0.65);
+    hand.userData.sharedGeo = Boolean(shared);
     elbow.add(hand);
 
     return { shoulder, elbow };
@@ -183,22 +267,34 @@ export function createSurferRig(
     hip.position.set(side * 0.095, -0.04, 0);
     hips.add(hip);
 
-    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.068, 0.3, 6, 12), suitMat);
+    const thigh = new THREE.Mesh(
+      shared ? shared.thigh : new THREE.CapsuleGeometry(0.068, 0.3, 6, 12),
+      suitMat
+    );
     thigh.position.y = -0.18;
-    thigh.castShadow = true;
+    thigh.castShadow = castShadows;
+    thigh.userData.sharedGeo = Boolean(shared);
     hip.add(thigh);
 
     const knee = new THREE.Group();
     knee.position.set(0, -0.37, 0);
     hip.add(knee);
 
-    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.32, 6, 12), suitMat);
+    const shin = new THREE.Mesh(
+      shared ? shared.shin : new THREE.CapsuleGeometry(0.05, 0.32, 6, 12),
+      suitMat
+    );
     shin.position.y = -0.19;
-    shin.castShadow = true;
+    shin.castShadow = castShadows;
+    shin.userData.sharedGeo = Boolean(shared);
     knee.add(shin);
 
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.05, 0.21), skinMat);
+    const foot = new THREE.Mesh(
+      shared ? shared.foot : new THREE.BoxGeometry(0.085, 0.05, 0.21),
+      skinMat
+    );
     foot.position.set(0, -0.4, 0.05);
+    foot.userData.sharedGeo = Boolean(shared);
     knee.add(foot);
 
     return { hip, knee };
@@ -221,7 +317,10 @@ export function createSurferRig(
         else child.material.dispose();
       }
     });
-    boardMesh = createSurfboardGroup(spec);
+    boardMesh = createSurfboardGroup(spec, {
+      castShadows,
+      lightweightMaterial: shareGeos,
+    });
     boardContainer.add(boardMesh);
     currentBoardId = spec.id;
   };
@@ -380,16 +479,24 @@ export function createSurferRig(
       characterGroup.quaternion.copy(boardContainer.quaternion);
     }
 
-    // 2. Procedural body posture per surfing phase
+    // 2. Procedural body posture per surfing phase (connected to board weight, velocity & landing absorption)
     const stanceSign = isGoofy ? -1 : 1;
-    const speedFactor = THREE.MathUtils.clamp(state.speed / 16, 0, 1);
+    const speedFactor = THREE.MathUtils.clamp(state.speed / 16, 0, 1.15);
+    const carveLean = THREE.MathUtils.clamp(state.roll, -0.88, 0.88);
+    const bal = THREE.MathUtils.clamp(state.balance, -1.2, 1.2);
+    const landComp = THREE.MathUtils.clamp(state.landingCompression ?? 0, 0, 1);
+    const manIntensity = THREE.MathUtils.clamp(
+      state.carvingIntensity * 0.65 + speedFactor * 0.45,
+      0.35,
+      1.3
+    );
 
-    let hipsY = 0.84;
+    let hipsY = 0.82;
     let hipsZ = -0.05;
-    let hipsRotX = 0;
+    let hipsRotX = 0.04;
     let hipsRotY = stanceSign * 1.15;
     let hipsRotZ = 0;
-    let torsoRotX = 0.22;
+    let torsoRotX = 0.24;
     let torsoRotY = 0;
     let torsoRotZ = 0;
     let headRotY = -hipsRotY * 0.82;
@@ -400,12 +507,12 @@ export function createSurferRig(
     let rHipX = -0.55;
     let rKneeX = 0.92;
 
-    let lShX = -0.4;
+    let lShX = -0.42;
     let lShZ = -0.55;
-    let lElbX = -0.6;
-    let rShX = -0.35;
+    let lElbX = -0.55;
+    let rShX = -0.38;
     let rShZ = 0.65;
-    let rElbX = -0.5;
+    let rElbX = -0.48;
 
     let boardOffsetX = 0;
     let boardOffsetY = 0;
@@ -500,84 +607,173 @@ export function createSurferRig(
       rShZ = 0.28;
       rElbX = -0.45;
     } else if (state.phase === 'takeoff') {
-      // Dynamic pop-up transition from prone to crouched surf stance
+      // Fluid 3-stage pop-up from prone push-up -> tucked knee drive -> spring into surf crouch
       const p = THREE.MathUtils.clamp(state.takeoffTimer / 0.42, 0, 1);
-      hipsY = THREE.MathUtils.lerp(0.24, 0.72, p);
-      hipsRotX = THREE.MathUtils.lerp(1.15, 0.15, p);
-      torsoRotX = 0.48;
-      lHipX = -0.95;
-      lKneeX = 1.55;
-      rHipX = -0.85;
-      rKneeX = 1.45;
-      lShX = -0.85;
-      rShX = -0.85;
+      const easeP = p * p * (3 - 2 * p);
+      hipsY = THREE.MathUtils.lerp(0.24, 0.72, easeP);
+      hipsZ = THREE.MathUtils.lerp(-0.14, -0.04, easeP);
+      hipsRotX = THREE.MathUtils.lerp(1.12, 0.12, easeP);
+      hipsRotY = THREE.MathUtils.lerp(0.25 * stanceSign, stanceSign * 1.15, easeP);
+      torsoRotX = THREE.MathUtils.lerp(0.18, 0.42, easeP);
+      torsoRotY = stanceSign * (1 - easeP) * 0.28;
+      headRotY = -hipsRotY * 0.8;
+      headRotX = THREE.MathUtils.lerp(-0.42, -0.15, easeP);
+
+      lHipX = THREE.MathUtils.lerp(-0.35, -0.82, easeP);
+      lKneeX = THREE.MathUtils.lerp(0.65, 1.38, easeP);
+      rHipX = THREE.MathUtils.lerp(-0.45, -0.76, easeP);
+      rKneeX = THREE.MathUtils.lerp(0.75, 1.30, easeP);
+
+      lShX = THREE.MathUtils.lerp(-1.55, -0.65, easeP);
+      lShZ = THREE.MathUtils.lerp(-0.35, -0.68, easeP);
+      lElbX = THREE.MathUtils.lerp(-0.35, -0.72, easeP);
+      rShX = THREE.MathUtils.lerp(-1.55, -0.58, easeP);
+      rShZ = THREE.MathUtils.lerp(0.35, 0.72, easeP);
+      rElbX = THREE.MathUtils.lerp(-0.35, -0.68, easeP);
     } else if (state.phase === 'barrel') {
-      // Compact low crouch inside the curling tube, trailing hand brushing the water wall
-      hipsY = 0.63;
-      hipsRotX = 0.25;
-      torsoRotX = 0.56;
-      torsoRotZ = state.roll * 0.35;
-      lHipX = -1.05;
-      lKneeX = 1.72;
-      rHipX = -0.95;
+      // Dynamic tube crouch: reactive low center of gravity, trailing arm lightly brushing wall
+      const microBob = Math.sin(time * 4.2) * 0.018;
+      hipsY = 0.61 - Math.abs(carveLean) * 0.04 + microBob;
+      hipsZ = -0.06;
+      hipsRotX = 0.22;
+      hipsRotY = stanceSign * 1.08;
+      hipsRotZ = bal * 0.14;
+      torsoRotX = 0.56 + speedFactor * 0.08;
+      torsoRotY = -carveLean * 0.28 - stanceSign * 0.18;
+      torsoRotZ = carveLean * 0.32 + bal * 0.22;
+      headRotY = -hipsRotY * 0.78 - torsoRotY * 0.55;
+      headRotX = -0.22;
+
+      lHipX = -1.04 - Math.abs(carveLean) * 0.12;
+      lKneeX = 1.72 + Math.abs(carveLean) * 0.15;
+      rHipX = -0.94;
       rKneeX = 1.62;
-      lShX = -0.55;
-      lShZ = -0.95;
-      lElbX = -0.25;
-      rShX = -0.85;
-      rShZ = 0.45;
-      rElbX = -0.9;
+
+      // Trailing arm drops low to read the tube face; lead arm stays compact inside
+      lShX = -0.52 - carveLean * 0.25;
+      lShZ = -0.92 - bal * 0.28;
+      lElbX = -0.28;
+      rShX = -0.82;
+      rShZ = 0.44 - bal * 0.22;
+      rElbX = -0.95;
     } else if (state.phase === 'maneuver') {
-      const mProgress = THREE.MathUtils.clamp(state.maneuverTimer / state.maneuverDuration, 0, 1);
+      const dur = Math.max(0.1, state.maneuverDuration);
+      const mProgress = THREE.MathUtils.clamp(state.maneuverTimer / dur, 0, 1);
+      const bell = Math.sin(mProgress * Math.PI);
+      const exitBlend = THREE.MathUtils.smoothstep(mProgress, 0.72, 1.0);
+
       if (state.activeManeuver === 'bottomTurn') {
-        const comp = Math.sin(mProgress * Math.PI);
-        hipsY = 0.78 - comp * 0.18;
-        torsoRotX = 0.35 + comp * 0.35;
-        torsoRotZ = -state.roll * 0.45;
-        lHipX = -0.8 - comp * 0.3;
-        lKneeX = 1.3 + comp * 0.45;
-        rHipX = -0.75 - comp * 0.3;
-        rKneeX = 1.25 + comp * 0.45;
-        rShX = -0.2;
-        rShZ = 1.15 * comp + 0.4;
-        lShX = -1.1;
-        lShZ = -0.85;
+        // 3-phase power bottom turn: entry sink -> deep compressed carve with trailing arm touch -> upward unweight
+        const comp = bell * (0.82 + manIntensity * 0.25);
+        hipsY = THREE.MathUtils.lerp(0.78 - comp * 0.19, 0.80, exitBlend);
+        hipsZ = -0.06;
+        hipsRotX = 0.12 + comp * 0.14;
+        hipsRotY = stanceSign * (1.15 - comp * 0.25);
+        hipsRotZ = carveLean * 0.22;
+
+        torsoRotX = 0.34 + comp * 0.34;
+        torsoRotY = -carveLean * 0.55 * comp;
+        torsoRotZ = -carveLean * 0.42;
+        headRotY = -hipsRotY * 0.75 - torsoRotY * 0.55; // eyes lock up onto the next lip section!
+        headRotX = -0.18;
+
+        lHipX = -0.78 - comp * 0.32;
+        lKneeX = 1.32 + comp * 0.48;
+        rHipX = -0.74 - comp * 0.28;
+        rKneeX = 1.26 + comp * 0.44;
+
+        rShX = -0.22 - comp * 0.25;
+        rShZ = 0.48 + comp * 0.88;
+        rElbX = -0.42 - comp * 0.42;
+        lShX = -1.02 * comp - 0.45 * (1 - comp);
+        lShZ = -0.82 - comp * 0.25;
+        lElbX = -0.58 - comp * 0.35;
       } else if (state.activeManeuver === 'cutback') {
-        const whip = Math.sin(mProgress * Math.PI);
-        hipsY = 0.74;
-        torsoRotY = -stanceSign * whip * 0.95;
-        torsoRotX = 0.42;
-        headRotY = -hipsRotY * 0.6 - torsoRotY * 0.5;
-        lShX = -0.75;
-        lShZ = -1.25;
-        rShX = -0.55;
-        rShZ = 1.15;
+        // High-torque shoulder & hip whip carving back toward the whitewater pocket, then snapping forward
+        const whip = bell * (0.85 + manIntensity * 0.22);
+        const snapCurve = Math.sin(mProgress * Math.PI * 1.15);
+        hipsY = 0.74 - whip * 0.08 + exitBlend * 0.06;
+        hipsZ = -0.05;
+        hipsRotX = 0.10 + whip * 0.10;
+        hipsRotY = stanceSign * (1.12 - snapCurve * 0.48);
+        hipsRotZ = carveLean * 0.20 + bal * 0.15;
+
+        torsoRotY = -stanceSign * snapCurve * (0.85 + manIntensity * 0.18);
+        torsoRotX = 0.38 + whip * 0.12;
+        torsoRotZ = -carveLean * 0.38 + bal * 0.25;
+        headRotY = -hipsRotY * 0.65 - torsoRotY * 0.68;
+        headRotX = -0.14;
+
+        lHipX = -0.72 - whip * 0.24;
+        lKneeX = 1.24 + whip * 0.38;
+        rHipX = -0.84 - whip * 0.18;
+        rKneeX = 1.42 + whip * 0.32;
+
+        lShX = -0.72 - snapCurve * 0.35;
+        lShZ = -1.18 - whip * 0.22;
+        lElbX = -0.62 - whip * 0.28;
+        rShX = -0.52 + snapCurve * 0.32;
+        rShZ = 1.12 + whip * 0.22;
+        rElbX = -0.58 - whip * 0.25;
       } else if (state.activeManeuver === 'floater') {
-        hipsY = 0.72;
-        torsoRotX = 0.48;
-        lHipX = -0.92;
-        lKneeX = 1.55;
-        rHipX = -0.92;
-        rKneeX = 1.55;
-        lShX = -0.65;
-        lShZ = -1.1;
-        rShX = -0.65;
-        rShZ = 1.1;
+        // Crest pop -> high-line poise with wide balance -> soft drop-down knee prep for water touch
+        const landingPrep = THREE.MathUtils.smoothstep(mProgress, 0.72, 1.0);
+        hipsY = 0.74 + bell * 0.04 - landingPrep * 0.12;
+        hipsZ = -0.05;
+        hipsRotX = 0.08 + landingPrep * 0.12;
+        hipsRotY = stanceSign * 1.15;
+        hipsRotZ = bal * 0.24;
+
+        torsoRotX = 0.42 + landingPrep * 0.14;
+        torsoRotY = Math.sin(mProgress * Math.PI * 2) * 0.16;
+        torsoRotZ = -carveLean * 0.32 + bal * 0.35;
+        headRotY = -hipsRotY * 0.82;
+        headRotX = -0.14 - landingPrep * 0.08;
+
+        lHipX = -0.86 - landingPrep * 0.20;
+        lKneeX = 1.44 + landingPrep * 0.34;
+        rHipX = -0.88 - landingPrep * 0.20;
+        rKneeX = 1.48 + landingPrep * 0.34;
+
+        lShX = -0.58;
+        lShZ = -1.12 - Math.abs(bal) * 0.22;
+        lElbX = -0.38;
+        rShX = -0.58;
+        rShZ = 1.12 + Math.abs(bal) * 0.22;
+        rElbX = -0.38;
       }
     } else if (state.phase === 'airborne') {
-      // Mid-air tucked grab pose
-      hipsY = 0.70;
-      torsoRotX = 0.58;
-      lHipX = -1.15;
-      lKneeX = 1.85;
-      rHipX = -1.05;
-      rKneeX = 1.75;
-      lShX = -1.1;
-      lShZ = -0.35;
-      lElbX = -0.55;
-      rShX = -0.6;
-      rShZ = 1.2;
-      rElbX = -0.4;
+      // Dynamic 3-phase aerial: (1) Lip Launch pop -> (2) Apex Grab/Tweak -> (3) Landing Prep Extension
+      const launchBlend = THREE.MathUtils.clamp((state.verticalVel - 2.0) / 5.5, 0, 1);
+      const descentBlend = THREE.MathUtils.clamp((-state.verticalVel - 1.4) / 5.0, 0, 1);
+      const apexGrab = THREE.MathUtils.clamp(1 - launchBlend * 0.7 - descentBlend * 0.85, 0.15, 1);
+
+      hipsY = 0.68 + launchBlend * 0.09 - descentBlend * 0.06;
+      hipsZ = -0.04;
+      hipsRotX = 0.06 - launchBlend * 0.08 + descentBlend * 0.14;
+      hipsRotY = stanceSign * (1.12 + apexGrab * 0.16);
+      hipsRotZ = bal * 0.18;
+
+      torsoRotX = 0.56 * apexGrab + 0.34 * launchBlend + 0.44 * descentBlend;
+      torsoRotY = stanceSign * (apexGrab * 0.28 - descentBlend * 0.15);
+      torsoRotZ = -carveLean * 0.24 + bal * 0.22;
+      headRotY = -hipsRotY * 0.78 - torsoRotY * 0.4;
+      headRotX = descentBlend > 0.2 ? -0.24 : -0.12;
+
+      // Tuck tightly at apex, uncoil smoothly to spot & absorb water landing
+      lHipX = THREE.MathUtils.lerp(-1.18, -0.78, descentBlend);
+      lKneeX = THREE.MathUtils.lerp(1.92, 1.32, descentBlend);
+      rHipX = THREE.MathUtils.lerp(-1.08, -0.74, descentBlend);
+      rKneeX = THREE.MathUtils.lerp(1.80, 1.26, descentBlend);
+
+      // Lead hand reaches toward rail grab at apex, opens wide during descent for balance!
+      lShX = THREE.MathUtils.lerp(-1.18, -0.52, descentBlend);
+      lShZ = THREE.MathUtils.lerp(-0.32, -1.05, descentBlend);
+      lElbX = THREE.MathUtils.lerp(-0.62, -0.35, descentBlend);
+
+      rShX = THREE.MathUtils.lerp(-0.64, -0.45, descentBlend);
+      rShZ = THREE.MathUtils.lerp(1.22, 1.05, descentBlend);
+      rElbX = THREE.MathUtils.lerp(-0.45, -0.38, descentBlend);
     } else if (state.phase === 'wipeout') {
       // Directional fall, water entry tumble, and resurfacing animations
       const wt = state.wipeoutTimer;
@@ -698,21 +894,49 @@ export function createSurferRig(
       rShZ = 0.35;
       rElbX = -0.3 - Math.max(0, Math.cos(stroke + Math.PI)) * 0.65 * swimActive;
     } else {
-      // Active 'riding' stance with organic weight shifting & balance counter-lean
-      const breathe = Math.sin(time * 2.4) * 0.025;
-      hipsY = 0.80 - speedFactor * 0.07 + breathe;
-      torsoRotX = 0.24 + speedFactor * 0.14;
-      torsoRotZ = -state.roll * 0.45 + state.balance * 0.32;
-      hipsRotZ = state.balance * 0.18;
+      // Active 'riding' stance: fluid rail-to-rail knee drive, chop absorption, turn anticipation & landing crouch
+      const breathe = Math.sin(time * 2.4) * 0.02;
+      const chopFlex = Math.sin(time * (5.2 + speedFactor * 4.8)) * 0.022 * speedFactor;
+      const carveDepth = Math.abs(carveLean) * 0.14;
+      const landSquat = landComp * 0.22;
 
-      lShZ = -0.65 - state.balance * 0.55 + Math.sin(time * 2.1) * 0.06;
-      rShZ = 0.65 - state.balance * 0.55 - Math.sin(time * 2.1) * 0.06;
-      lShX = -0.45 - state.roll * 0.35;
-      rShX = -0.45 + state.roll * 0.35;
+      hipsY = 0.82 - speedFactor * 0.07 - carveDepth - landSquat + breathe + chopFlex;
+      hipsZ = -0.05 - carveDepth * 0.15;
+      hipsRotX = 0.06 + carveDepth * 0.45 + landSquat * 0.55;
+      hipsRotY = stanceSign * 1.15 - carveLean * 0.24;
+      hipsRotZ = bal * 0.20 + carveLean * 0.10;
+
+      // Upper body leans coherently into turns and counters balance shifts naturally
+      torsoRotX = 0.24 + speedFactor * 0.14 + carveDepth * 0.65 + landSquat * 0.75;
+      torsoRotY = -carveLean * 0.48 * stanceSign - bal * 0.16;
+      torsoRotZ = -carveLean * 0.46 + bal * 0.34;
+      headRotY = -hipsRotY * 0.80 - torsoRotY * 0.52 - carveLean * 0.22;
+      headRotX = -0.10 - landSquat * 0.14;
+
+      // Dynamic knee compression & rail weighting (front vs back leg pressure shifts with roll & pitch)
+      const kneeExtra = carveDepth * 1.9 + landSquat * 2.1 - chopFlex * 2.4;
+      const railWeight = carveLean * 0.18 * stanceSign;
+      lHipX = -0.46 - kneeExtra * 0.52 - railWeight;
+      lKneeX = 0.88 + kneeExtra + railWeight * 1.4;
+      rHipX = -0.56 - kneeExtra * 0.52 + railWeight;
+      rKneeX = 0.96 + kneeExtra - railWeight * 1.4;
+
+      // Expressive arms & elbows react to speed, carve lean & balance compensation
+      const armSpread = Math.abs(bal) * 0.48 + landComp * 0.35;
+      lShZ = -0.66 - bal * 0.52 - armSpread * 0.55 + Math.sin(time * 2.1) * 0.05;
+      rShZ = 0.66 - bal * 0.52 + armSpread * 0.55 - Math.sin(time * 2.1) * 0.05;
+      lShX = -0.46 - carveLean * 0.42 - landSquat * 0.65;
+      rShX = -0.42 + carveLean * 0.42 - landSquat * 0.65;
+      lElbX = -0.56 - Math.abs(carveLean) * 0.36 - landComp * 0.45;
+      rElbX = -0.52 - Math.abs(carveLean) * 0.32 - landComp * 0.45;
     }
 
-    const animLambda = state.phase === 'wipeout' ? 11 : 14;
+    // Layered multi-rate damping removes rigid/robotic snaps between phases while keeping responsiveness
+    const lowerLambda = state.phase === 'wipeout' ? 11.5 : state.phase === 'takeoff' ? 16.5 : 14.5;
+    const upperLambda = state.phase === 'wipeout' ? 10.5 : 11.0;
+    const armLambda = state.phase === 'wipeout' ? 12.0 : 12.5;
     const boardCarryLambda = state.phase === 'beachWalk' ? 12 : 18;
+
     boardMesh.position.x = damp(boardMesh.position.x, boardOffsetX, boardCarryLambda, dt);
     boardMesh.position.y = damp(boardMesh.position.y, boardOffsetY, boardCarryLambda, dt);
     boardMesh.position.z = damp(boardMesh.position.z, boardOffsetZ, boardCarryLambda, dt);
@@ -720,31 +944,31 @@ export function createSurferRig(
     boardMesh.rotation.y = damp(boardMesh.rotation.y, boardRotY, boardCarryLambda, dt);
     boardMesh.rotation.z = damp(boardMesh.rotation.z, boardRotZ, boardCarryLambda, dt);
 
-    hips.position.y = damp(hips.position.y, hipsY, animLambda, dt);
-    hips.position.z = damp(hips.position.z, hipsZ, animLambda, dt);
-    hips.rotation.x = damp(hips.rotation.x, hipsRotX, animLambda, dt);
-    hips.rotation.y = damp(hips.rotation.y, hipsRotY, animLambda, dt);
-    hips.rotation.z = damp(hips.rotation.z, hipsRotZ, animLambda, dt);
+    hips.position.y = damp(hips.position.y, hipsY, lowerLambda, dt);
+    hips.position.z = damp(hips.position.z, hipsZ, lowerLambda, dt);
+    hips.rotation.x = damp(hips.rotation.x, hipsRotX, lowerLambda, dt);
+    hips.rotation.y = damp(hips.rotation.y, hipsRotY, lowerLambda, dt);
+    hips.rotation.z = damp(hips.rotation.z, hipsRotZ, lowerLambda, dt);
 
-    torso.rotation.x = damp(torso.rotation.x, torsoRotX, animLambda, dt);
-    torso.rotation.y = damp(torso.rotation.y, torsoRotY, animLambda, dt);
-    torso.rotation.z = damp(torso.rotation.z, torsoRotZ, animLambda, dt);
+    torso.rotation.x = damp(torso.rotation.x, torsoRotX, upperLambda, dt);
+    torso.rotation.y = damp(torso.rotation.y, torsoRotY, upperLambda, dt);
+    torso.rotation.z = damp(torso.rotation.z, torsoRotZ, upperLambda, dt);
 
-    head.rotation.x = damp(head.rotation.x, headRotX, animLambda, dt);
-    head.rotation.y = damp(head.rotation.y, headRotY, animLambda, dt);
+    head.rotation.x = damp(head.rotation.x, headRotX, upperLambda, dt);
+    head.rotation.y = damp(head.rotation.y, headRotY, upperLambda, dt);
 
-    leftHip.rotation.x = damp(leftHip.rotation.x, lHipX, animLambda, dt);
-    leftKnee.rotation.x = damp(leftKnee.rotation.x, lKneeX, animLambda, dt);
-    rightHip.rotation.x = damp(rightHip.rotation.x, rHipX, animLambda, dt);
-    rightKnee.rotation.x = damp(rightKnee.rotation.x, rKneeX, animLambda, dt);
+    leftHip.rotation.x = damp(leftHip.rotation.x, lHipX, lowerLambda, dt);
+    leftKnee.rotation.x = damp(leftKnee.rotation.x, lKneeX, lowerLambda, dt);
+    rightHip.rotation.x = damp(rightHip.rotation.x, rHipX, lowerLambda, dt);
+    rightKnee.rotation.x = damp(rightKnee.rotation.x, rKneeX, lowerLambda, dt);
 
-    leftShoulder.rotation.x = damp(leftShoulder.rotation.x, lShX, animLambda, dt);
-    leftShoulder.rotation.z = damp(leftShoulder.rotation.z, lShZ, animLambda, dt);
-    leftElbow.rotation.x = damp(leftElbow.rotation.x, lElbX, animLambda, dt);
+    leftShoulder.rotation.x = damp(leftShoulder.rotation.x, lShX, armLambda, dt);
+    leftShoulder.rotation.z = damp(leftShoulder.rotation.z, lShZ, armLambda, dt);
+    leftElbow.rotation.x = damp(leftElbow.rotation.x, lElbX, armLambda, dt);
 
-    rightShoulder.rotation.x = damp(rightShoulder.rotation.x, rShX, animLambda, dt);
-    rightShoulder.rotation.z = damp(rightShoulder.rotation.z, rShZ, animLambda, dt);
-    rightElbow.rotation.x = damp(rightElbow.rotation.x, rElbX, animLambda, dt);
+    rightShoulder.rotation.x = damp(rightShoulder.rotation.x, rShX, armLambda, dt);
+    rightShoulder.rotation.z = damp(rightShoulder.rotation.z, rShZ, armLambda, dt);
+    rightElbow.rotation.x = damp(rightElbow.rotation.x, rElbX, armLambda, dt);
   };
 
   return {
@@ -770,7 +994,9 @@ export function createSurferRig(
     dispose: () => {
       root.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
+          if (!child.userData.sharedGeo) {
+            child.geometry.dispose();
+          }
           if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
           else child.material.dispose();
         }

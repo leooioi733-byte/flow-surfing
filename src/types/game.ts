@@ -173,6 +173,7 @@ export interface CompletedWaveTelemetry {
   barrelTime: number;
   maneuvers: number;
   bestManeuver: string;
+  maxSequenceChain?: number;
 }
 
 export interface SurfHUDState {
@@ -190,6 +191,10 @@ export interface SurfHUDState {
   lastCallout: string;
   lastQuality: ExecutionQuality | null;
   calloutId: number;
+  sequenceChain: number;
+  sequenceTag: string;
+  sequenceTier: number;
+  maxSequenceChain: number;
   waveNumber: number;
   currentWavePoints: number;
   currentWaveManeuvers: number;
@@ -206,5 +211,8 @@ export interface SurfHUDState {
   rainIntensity: number;
   maneuverSlowMo: number; // 0..1 smooth maneuver slow-motion factor
   postFxActive: boolean; // true when WebGL ShaderPass renders camera FX directly
+  cutsceneActive: boolean;
+  cutsceneStage: number; // 0 if inactive, 1..6 during pre-heat cutscene
+  cutsceneProgress: number; // 0..1
   replay: ReplayHUDState;
 }

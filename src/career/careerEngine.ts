@@ -1,8 +1,11 @@
 import {
+  buildCareerObjectivesForTier,
   buildRivalDialogue,
+  CAREER_ACHIEVEMENTS_CATALOG,
   CAREER_BOARD_CATALOG,
   CAREER_TIERS,
   createInitialOpponents,
+  inferAiStyleFocus,
   SPONSOR_BRANDS,
   TIER_EVENT_TEMPLATES,
   TIER_MAP,
@@ -13,9 +16,11 @@ import {
   AISurfer,
   CareerEvent,
   CareerEventResult,
+  CareerObjective,
   CareerSaveState,
   CareerSurferCustomization,
   CareerTierId,
+  CareerTitleRecord,
   HeatCompetitor,
   HeatMatch,
   HeatRoundType,
@@ -27,11 +32,96 @@ import {
   SeasonSummary,
   SponsorBrand,
   SponsorContract,
+  TournamentMilestoneSummary,
 } from '../types/career';
 import { CompletedWaveTelemetry, SurferProfile } from '../types/game';
 
 const CAREER_STORAGE_KEY = 'flow_career_save_v1';
 const TIER_ORDER: CareerTierId[] = ['amador', 'regional', 'acesso', 'mundial'];
+
+export interface HeatTelemetryExtras {
+  maxSequenceChain?: number;
+  maxBarrelDuration?: number;
+  excellentWavesCount?: number;
+}
+
+function migrateCareerSave(parsed: CareerSaveState): CareerSaveState {
+  const now = parsed.updatedAt || new Date().toISOString();
+  const opponents = (parsed.opponents ?? []).map((ai) => ({
+    ...ai,
+    styleFocus: ai.styleFocus ?? inferAiStyleFocus(ai),
+  }));
+
+  const unlocked: Record<string, string> = { ...(parsed.unlockedAchievements ?? {}) };
+  if (parsed.wins > 0 && !unlocked['first-event-title']) unlocked['first-event-title'] = now;
+  if (parsed.bestWave >= 8.0 && !unlocked['excellent-wave']) unlocked['excellent-wave'] = now;
+  if (parsed.bestWave >= 9.0 && !unlocked['nine-club']) unlocked['nine-club'] = now;
+  if (parsed.sponsors.some((s) => s.status === 'completed') && !unlocked['sponsor-complete']) {
+    unlocked['sponsor-complete'] = now;
+  }
+  if (parsed.tier !== 'amador' && !unlocked['tier-promotion']) unlocked['tier-promotion'] = now;
+  if (parsed.seasonSummaries.some((s) => s.wonWorldTitle) && !unlocked['world-champion']) {
+    unlocked['world-champion'] = now;
+  }
+
+  let titlesWon: CareerTitleRecord[] = Array.isArray(parsed.titlesWon) ? [...parsed.titlesWon] : [];
+  if (titlesWon.length === 0) {
+    // Backfill titles cleanly from existing history & season summaries
+    for (const h of parsed.history ?? []) {
+      if (h.placement === 1) {
+        titlesWon.push({
+          id: `title-ev-${h.eventId}`,
+          season: h.season,
+          tier: h.tier,
+          title: `Campeão — ${h.eventName}`,
+          eventName: h.eventName,
+          kind: 'event_title',
+          earnedAt: now,
+        });
+      }
+    }
+    for (const ss of parsed.seasonSummaries ?? []) {
+      if (ss.wonWorldTitle) {
+        titlesWon.push({
+          id: `title-world-s${ss.season}`,
+          season: ss.season,
+          tier: ss.tier,
+          title: `Campeão Mundial FLOW — Temporada ${ss.season}`,
+          kind: 'world_champion',
+          earnedAt: now,
+        });
+      } else if (ss.finalRank === 1) {
+        titlesWon.push({
+          id: `title-div-s${ss.season}-${ss.tier}`,
+          season: ss.season,
+          tier: ss.tier,
+          title: `Campeão ${TIER_MAP[ss.tier].shortName} — Temporada ${ss.season}`,
+          kind: 'division_champion',
+          earnedAt: now,
+        });
+      }
+    }
+  }
+
+  const careerObjectives =
+    Array.isArray(parsed.careerObjectives) && parsed.careerObjectives.length > 0
+      ? parsed.careerObjectives
+      : buildCareerObjectivesForTier(parsed.tier, parsed.season, parsed.calendar);
+
+  return {
+    ...parsed,
+    opponents,
+    rivalries: Array.isArray(parsed.rivalries) ? parsed.rivalries : [],
+    rivalryNotifications: Array.isArray(parsed.rivalryNotifications)
+      ? parsed.rivalryNotifications
+      : [],
+    unlockedAchievements: unlocked,
+    careerObjectives,
+    titlesWon,
+    maxSequenceInCareer: parsed.maxSequenceInCareer ?? 0,
+    longestBarrelInCareer: parsed.longestBarrelInCareer ?? 0,
+  };
+}
 
 export function loadCareerSave(): CareerSaveState | null {
   if (typeof window === 'undefined') return null;
@@ -42,13 +132,7 @@ export function loadCareerSave(): CareerSaveState | null {
     if (!parsed || parsed.version !== 1 || !parsed.surfer || !parsed.calendar) {
       return null;
     }
-    return {
-      ...parsed,
-      rivalries: Array.isArray(parsed.rivalries) ? parsed.rivalries : [],
-      rivalryNotifications: Array.isArray(parsed.rivalryNotifications)
-        ? parsed.rivalryNotifications
-        : [],
-    };
+    return migrateCareerSave(parsed);
   } catch {
     return null;
   }
@@ -175,6 +259,7 @@ export function createNewCareer(
     : 'vortex-pro';
   const now = new Date().toISOString();
   const initialSponsors = evaluateSponsorInvitations('amador', 10, []);
+  const initialCalendar = generateSeasonCalendar('amador', 1);
 
   const state: CareerSaveState = {
     version: 1,
@@ -195,7 +280,7 @@ export function createNewCareer(
     prizeBalance: 250,
     totalCareerEarnings: 250,
     reputation: 15,
-    calendar: generateSeasonCalendar('amador', 1),
+    calendar: initialCalendar,
     opponents: createInitialOpponents(),
     sponsors: initialSponsors,
     history: [],
@@ -204,6 +289,11 @@ export function createNewCareer(
     pendingSeasonSummary: null,
     rivalries: [],
     rivalryNotifications: [],
+    unlockedAchievements: {},
+    careerObjectives: buildCareerObjectivesForTier('amador', 1, initialCalendar),
+    titlesWon: [],
+    maxSequenceInCareer: 0,
+    longestBarrelInCareer: 0,
   };
 
   saveCareerState(state);
@@ -240,18 +330,39 @@ function roundToTenth(val: number): number {
 function generateAiScheduledWaves(
   ai: AISurfer,
   durationSec: number,
-  tier: CareerTierId
+  tier: CareerTierId,
+  event?: CareerEvent
 ): Array<{ atElapsedSec: number; score: number; bestManeuver: string }> {
   const tierFactor =
     tier === 'mundial' ? 1.0 : tier === 'acesso' ? 0.92 : tier === 'regional' ? 0.82 : 0.72;
   const skillNorm = (ai.skillLevel - 40) / 60; // ~0.13 .. 0.95
-  const waveCount = 3 + (Math.random() < ai.consistency ? 1 : 0);
-  const maneuversPool = [
-    ai.barrelSkill > 0.75 ? 'Tubo Profundo' : 'Bottom Turn',
-    ai.airSkill > 0.72 ? 'Aerial 360' : 'Cutback',
-    'Floater',
-    'Snap no Lip',
-  ];
+  const focus = ai.styleFocus ?? inferAiStyleFocus(ai);
+
+  // Conditions match: heavy reef/barrel peaks reward barrel hunters; clean open walls reward technical surfers
+  const isHeavyBarrelPeak =
+    event?.beachId === 'tavarua-point' ||
+    event?.beachId === 'north-headland' ||
+    (event?.waveHeightLabel.includes('10') ?? false) ||
+    (event?.waveHeightLabel.includes('12') ?? false);
+  const conditionBonus =
+    focus === 'barrel'
+      ? isHeavyBarrelPeak
+        ? 0.42 * ai.barrelSkill
+        : -0.1
+      : focus === 'technical'
+        ? !isHeavyBarrelPeak
+          ? 0.36 * ai.airSkill
+          : 0.08 * ai.airSkill
+        : 0.16 * ((ai.barrelSkill + ai.airSkill) * 0.5);
+  const weatherMod = event?.weather === 'rainy' ? -0.18 : event?.weather === 'sunny' ? 0.12 : 0;
+
+  const waveCount = 3 + (Math.random() < ai.consistency * 0.9 ? 1 : 0);
+  const maneuversPool =
+    focus === 'barrel'
+      ? ['Tubo Profundo', 'Tubo → Cutback', 'Bottom Turn', 'Lip Snap']
+      : focus === 'technical'
+        ? ['Aerial 360', 'Bottom → Cutback', 'Floater Técnico', 'Snap no Lip']
+        : ['Cutback', 'Bottom Turn', 'Floater', ai.barrelSkill > 0.7 ? 'Tubo Limpo' : 'Aerial'];
 
   const waves: Array<{ atElapsedSec: number; score: number; bestManeuver: string }> = [];
   for (let i = 0; i < waveCount; i++) {
@@ -260,8 +371,8 @@ function generateAiScheduledWaves(
       8,
       Math.min(durationSec - 4, Math.round(slotBase + (Math.random() - 0.5) * 10))
     );
-    const variance = (Math.random() - 0.44) * (1 - ai.consistency * 0.48) * 3.1;
-    const baseScore = (3.4 + skillNorm * 5.2) * tierFactor + variance;
+    const variance = (Math.random() - 0.44) * (1 - ai.consistency * 0.52) * 3.1;
+    const baseScore = (3.35 + skillNorm * 5.15) * tierFactor + conditionBonus + weatherMod + variance;
     const score = roundToTenth(Math.max(1.8, Math.min(9.8, baseScore)));
     const bestManeuver = maneuversPool[Math.floor(Math.random() * maneuversPool.length)];
     waves.push({ atElapsedSec, score, bestManeuver });
@@ -278,8 +389,12 @@ function buildCompetitorFromPlayer(career: CareerSaveState): HeatCompetitor {
     isPlayer: true,
     skillLevel: Math.min(98, 52 + Math.round(career.reputation / 10)),
     style: career.surfer.style,
+    styleFocus: 'allround',
     suitColor: career.surfer.suitColor,
     accentColor: career.surfer.accentColor,
+    skinTone: career.surfer.skinTone,
+    hairColor: career.surfer.hairColor,
+    stance: career.surfer.stance,
     waves: [],
     bestTwoTotal: 0,
     heatRank: 1,
@@ -290,7 +405,8 @@ function buildCompetitorFromPlayer(career: CareerSaveState): HeatCompetitor {
 function buildCompetitorFromAI(
   ai: AISurfer,
   durationSec: number,
-  tier: CareerTierId
+  tier: CareerTierId,
+  event?: CareerEvent
 ): HeatCompetitor {
   return {
     id: ai.id,
@@ -299,13 +415,17 @@ function buildCompetitorFromAI(
     isPlayer: false,
     skillLevel: ai.skillLevel,
     style: ai.style,
+    styleFocus: ai.styleFocus ?? inferAiStyleFocus(ai),
     suitColor: ai.suitColor,
     accentColor: ai.accentColor,
+    skinTone: ai.skinTone,
+    hairColor: ai.hairColor,
+    stance: ai.stance,
     waves: [],
     bestTwoTotal: 0,
     heatRank: 1,
     advanced: false,
-    scheduledAiWaves: generateAiScheduledWaves(ai, durationSec, tier),
+    scheduledAiWaves: generateAiScheduledWaves(ai, durationSec, tier, event),
   };
 }
 
@@ -376,7 +496,7 @@ export function startChampionshipTournament(
 
   const playerComp = buildCompetitorFromPlayer(career);
   const aiComps = tierOpponents.map((ai) =>
-    buildCompetitorFromAI(ai, tierInfo.heatDurationSeconds, career.tier)
+    buildCompetitorFromAI(ai, tierInfo.heatDurationSeconds, career.tier, event)
   );
 
   let currentRound: HeatRoundType = 'quartas';
@@ -558,9 +678,21 @@ export function computeLiveHeatHUD(
   const topRival = rivals[0];
 
   const sortedPlayerWaves = [...playerWaves].sort((a, b) => b.score - a.score);
-  const h2hComp = t.headToHeadRivalId && !t.headToHeadSettledInEvent
-    ? ranked.find((c) => c.id === t.headToHeadRivalId)
-    : undefined;
+  const h2hComp =
+    t.headToHeadRivalId && !t.headToHeadSettledInEvent
+      ? ranked.find((c) => c.id === t.headToHeadRivalId)
+      : undefined;
+
+  // Score needed on a single new wave to surpass the advancing cutoff line
+  let neededToAdvance: number | null = null;
+  if (playerEntry && playerEntry.heatRank > advancingCount) {
+    const cutoffComp = [...ranked].sort((a, b) => a.heatRank - b.heatRank)[advancingCount - 1];
+    if (cutoffComp) {
+      const playerTop1 = sortedPlayerWaves[0]?.score ?? 0;
+      const req = Math.max(0.1, cutoffComp.bestTwoTotal - playerTop1 + 0.1);
+      neededToAdvance = req <= 10.0 ? Math.round(req * 10) / 10 : null;
+    }
+  }
 
   return {
     eventName: event.name,
@@ -574,6 +706,18 @@ export function computeLiveHeatHUD(
     topRivalName: h2hComp?.name ?? topRival?.name ?? 'Adversário',
     topRivalTotal: h2hComp?.bestTwoTotal ?? topRival?.bestTwoTotal ?? 0,
     advancingCount,
+    neededToAdvance,
+    opponentsSummary: ranked
+      .filter((c) => !c.isPlayer)
+      .sort((a, b) => a.heatRank - b.heatRank)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        nationalityCode: c.nationalityCode,
+        bestTwoTotal: c.bestTwoTotal,
+        heatRank: c.heatRank,
+        isH2HRival: c.id === t.headToHeadRivalId && !t.headToHeadSettledInEvent,
+      })),
     isHeadToHeadDuel: Boolean(h2hComp),
     rivalNameInHeat: h2hComp?.name,
   };
@@ -615,7 +759,8 @@ function buildNextRoundHeats(
   completedHeats: HeatMatch[],
   prevRound: HeatRoundType,
   tier: CareerTierId,
-  opponents: AISurfer[]
+  opponents: AISurfer[],
+  event?: CareerEvent
 ): { nextRound: HeatRoundType; heats: HeatMatch[] } {
   const tierInfo = TIER_MAP[tier];
   const advancers: HeatCompetitor[] = [];
@@ -634,7 +779,7 @@ function buildNextRoundHeats(
           const aiObj = opponents.find((o) => o.id === c.id);
           advancers.push(
             aiObj
-              ? buildCompetitorFromAI(aiObj, tierInfo.heatDurationSeconds, tier)
+              ? buildCompetitorFromAI(aiObj, tierInfo.heatDurationSeconds, tier, event)
               : {
                   ...c,
                   waves: [],
@@ -919,6 +1064,79 @@ function settleTournamentAndUpdateCareer(
     playerPlacement
   );
 
+  // Evaluate career objectives, achievements & event titles cleanly
+  let objBonusPrize = 0;
+  let objBonusRep = 0;
+  const completedObjectiveTitles: string[] = [];
+  const nextObjectives: CareerObjective[] = (career.careerObjectives ?? []).map((obj) => {
+    if (obj.completed) return obj;
+    let nextProgress = obj.progress;
+    if (obj.kind === 'heat_score') nextProgress = Math.max(obj.progress, roundToTenth(playerBestHeat));
+    else if (obj.kind === 'excellent_wave') nextProgress = Math.max(obj.progress, roundToTenth(playerBestWave));
+    else if (obj.kind === 'win_peak' && playerPlacement === 1 && obj.targetBeachId === event.beachId) {
+      nextProgress = 1;
+    }
+    const nowDone = nextProgress >= obj.targetValue;
+    if (nowDone) {
+      objBonusPrize += obj.rewardPrize;
+      objBonusRep += obj.rewardRep;
+      completedObjectiveTitles.push(obj.title);
+    }
+    return { ...obj, progress: Math.min(obj.targetValue, nextProgress), completed: nowDone };
+  });
+
+  const unlockedMap: Record<string, string> = { ...(career.unlockedAchievements ?? {}) };
+  const newlyUnlockedAchIds: string[] = [];
+  const tryUnlock = (id: string) => {
+    if (!unlockedMap[id]) {
+      unlockedMap[id] = new Date().toISOString();
+      newlyUnlockedAchIds.push(id);
+    }
+  };
+  if (playerPlacement === 1) tryUnlock('first-event-title');
+  if (playerBestWave >= 8.0) tryUnlock('excellent-wave');
+  if (playerBestWave >= 9.0) tryUnlock('nine-club');
+  if (updatedSponsors.some((s) => s.status === 'completed')) tryUnlock('sponsor-complete');
+
+  const achRepBonus = newlyUnlockedAchIds.reduce((sum, id) => {
+    const def = CAREER_ACHIEVEMENTS_CATALOG.find((a) => a.id === id);
+    return sum + (def?.repReward ?? 0);
+  }, 0);
+
+  const earnedTitles: string[] = [];
+  let titlesWon = [...(career.titlesWon ?? [])];
+  if (playerPlacement === 1) {
+    const titleLabel = `Campeão — ${event.name}`;
+    titlesWon = [
+      {
+        id: `title-ev-${event.id}`,
+        season: career.season,
+        tier: career.tier,
+        title: titleLabel,
+        eventName: event.name,
+        kind: 'event_title',
+        earnedAt: new Date().toISOString(),
+      },
+      ...titlesWon,
+    ];
+    earnedTitles.push(titleLabel);
+  }
+
+  const totalPrizeAwarded = totalPlayerPrize + rivalryUpdate.bonusPrize + objBonusPrize;
+  const totalRepAwarded =
+    repFromPlacement + sponsorRepBonus + rivalryUpdate.bonusRep + objBonusRep + achRepBonus;
+
+  const prevMilestones = career.activeTournament?.recentMilestones;
+  const mergedMilestones: TournamentMilestoneSummary = {
+    unlockedAchievements: Array.from(
+      new Set([...(prevMilestones?.unlockedAchievements ?? []), ...newlyUnlockedAchIds])
+    ),
+    completedObjectives: Array.from(
+      new Set([...(prevMilestones?.completedObjectives ?? []), ...completedObjectiveTitles])
+    ),
+    earnedTitles: Array.from(new Set([...(prevMilestones?.earnedTitles ?? []), ...earnedTitles])),
+  };
+
   // Check if entire season is completed!
   const allCompleted = updatedCalendar.every((e) => e.status === 'completed');
 
@@ -931,16 +1149,18 @@ function settleTournamentAndUpdateCareer(
     wins: career.wins + (playerPlacement === 1 ? 1 : 0),
     podiums: career.podiums + (playerPlacement <= 3 ? 1 : 0),
     bestWave: Math.max(career.bestWave, roundToTenth(playerBestWave)),
-    prizeBalance: career.prizeBalance + totalPlayerPrize + rivalryUpdate.bonusPrize,
-    totalCareerEarnings:
-      career.totalCareerEarnings + totalPlayerPrize + rivalryUpdate.bonusPrize,
-    reputation: newReputation + rivalryUpdate.bonusRep,
+    prizeBalance: career.prizeBalance + totalPrizeAwarded,
+    totalCareerEarnings: career.totalCareerEarnings + totalPrizeAwarded,
+    reputation: career.reputation + totalRepAwarded,
     unlockedBoardIds: Array.from(newlyUnlockedBoards),
     calendar: updatedCalendar,
     opponents: updatedOpponents,
-    sponsors: finalSponsors,
+    sponsors: evaluateSponsorInvitations(career.tier, career.reputation + totalRepAwarded, updatedSponsors),
     rivalries: rivalryUpdate.rivalries,
     rivalryNotifications: rivalryUpdate.notifications,
+    unlockedAchievements: unlockedMap,
+    careerObjectives: nextObjectives,
+    titlesWon,
     history: [
       {
         season: career.season,
@@ -952,7 +1172,7 @@ function settleTournamentAndUpdateCareer(
         bestHeatTotal: roundToTenth(playerBestHeat),
         bestWave: roundToTenth(playerBestWave),
         pointsEarned: playerPointsEarned,
-        prizeEarned: totalPlayerPrize + rivalryUpdate.bonusPrize,
+        prizeEarned: totalPrizeAwarded,
         maneuversLanded: playerManeuvers,
       },
       ...career.history,
@@ -964,10 +1184,11 @@ function settleTournamentAndUpdateCareer(
       eventFinished: true,
       finalResult: {
         ...eventResult,
-        prizeEarned: totalPlayerPrize + rivalryUpdate.bonusPrize,
+        prizeEarned: totalPrizeAwarded,
       },
       headToHeadSettledInEvent:
         career.activeTournament?.headToHeadSettledInEvent || rivalryUpdate.settledHeadToHead,
+      recentMilestones: mergedMilestones,
     },
   };
 
@@ -982,6 +1203,43 @@ function settleTournamentAndUpdateCareer(
     const seasonPrize = nextState.history
       .filter((h) => h.season === nextState.season)
       .reduce((acc, h) => acc + h.prizeEarned, 0);
+
+    // Unlock division / world title & promotion milestones immediately at season completion
+    const seasonUnlocked = { ...(nextState.unlockedAchievements ?? {}) };
+    if (promoted && !seasonUnlocked['tier-promotion']) {
+      seasonUnlocked['tier-promotion'] = new Date().toISOString();
+      nextState.reputation += 50;
+    }
+    if (wonWorldTitle) {
+      if (!seasonUnlocked['world-champion']) {
+        seasonUnlocked['world-champion'] = new Date().toISOString();
+        nextState.reputation += 120;
+      }
+      nextState.titlesWon = [
+        {
+          id: `title-world-s${nextState.season}`,
+          season: nextState.season,
+          tier: nextState.tier,
+          title: `Campeão Mundial FLOW — Temporada ${nextState.season}`,
+          kind: 'world_champion',
+          earnedAt: new Date().toISOString(),
+        },
+        ...(nextState.titlesWon ?? []),
+      ];
+    } else if (finalRank === 1) {
+      nextState.titlesWon = [
+        {
+          id: `title-div-s${nextState.season}-${nextState.tier}`,
+          season: nextState.season,
+          tier: nextState.tier,
+          title: `Campeão ${tierInfo.shortName} — Temporada ${nextState.season}`,
+          kind: 'division_champion',
+          earnedAt: new Date().toISOString(),
+        },
+        ...(nextState.titlesWon ?? []),
+      ];
+    }
+    nextState.unlockedAchievements = seasonUnlocked;
 
     const summary: SeasonSummary = {
       season: nextState.season,
@@ -1002,6 +1260,8 @@ function settleTournamentAndUpdateCareer(
     nextState.pendingSeasonSummary = summary;
   }
 
+  void newReputation;
+  void finalSponsors;
   saveCareerState(nextState);
   return nextState;
 }
@@ -1364,7 +1624,8 @@ function processRivalriesForTournament(
 
 export function finalizePlayerHeat(
   career: CareerSaveState,
-  playerFinalWaves: HeatWaveRecord[]
+  playerFinalWaves: HeatWaveRecord[],
+  extras?: HeatTelemetryExtras
 ): CareerSaveState {
   const t = career.activeTournament;
   if (!t) return career;
@@ -1391,7 +1652,16 @@ export function finalizePlayerHeat(
   const allCompletedRounds = [...t.completedRounds, completedRoundEntry];
 
   const playerHeat = finishedHeats[t.playerHeatIndex];
-  const playerAdvanced = playerHeat?.competitors.find((c) => c.isPlayer)?.advanced ?? false;
+  const playerComp = playerHeat?.competitors.find((c) => c.isPlayer);
+  const playerAdvanced = playerComp?.advanced ?? false;
+  const playerHeatRank = playerComp?.heatRank ?? 4;
+  const playerHeatTotal = playerComp?.bestTwoTotal ?? 0;
+  const playerBestWaveInHeat = Math.max(0, ...playerFinalWaves.map((w) => w.score));
+  const maxBarrelInHeat = Math.max(
+    extras?.maxBarrelDuration ?? 0,
+    ...playerFinalWaves.map((w) => w.barrelTime)
+  );
+  const maxSeqInHeat = extras?.maxSequenceChain ?? 0;
 
   // Evaluate direct heat rivalry & Head-to-Head duel right after this heat finishes
   const heatRivalry = playerHeat
@@ -1404,16 +1674,84 @@ export function finalizePlayerHeat(
         settledHeadToHead: false,
       };
 
+  // Evaluate heat-level Career Objectives & Achievements
+  let heatObjPrize = 0;
+  let heatObjRep = 0;
+  const completedObjTitles: string[] = [];
+  const nextObjectives: CareerObjective[] = (career.careerObjectives ?? []).map((obj) => {
+    if (obj.completed) return obj;
+    let nextProgress = obj.progress;
+    if (obj.kind === 'heat_score') nextProgress = Math.max(obj.progress, roundToTenth(playerHeatTotal));
+    else if (obj.kind === 'sequence_chain') nextProgress = Math.max(obj.progress, maxSeqInHeat);
+    else if (obj.kind === 'excellent_wave') {
+      nextProgress = Math.max(obj.progress, roundToTenth(playerBestWaveInHeat));
+    } else if (obj.kind === 'barrel_time') {
+      nextProgress = Math.max(obj.progress, roundToTenth(maxBarrelInHeat));
+    } else if (obj.kind === 'reach_final' && (t.currentRound === 'final' || (t.currentRound === 'semifinal' && playerAdvanced))) {
+      nextProgress = 1;
+    } else if (obj.kind === 'beat_rival' && playerHeatRank === 1) {
+      nextProgress = 1;
+    }
+
+    const nowDone = nextProgress >= obj.targetValue;
+    if (nowDone) {
+      heatObjPrize += obj.rewardPrize;
+      heatObjRep += obj.rewardRep;
+      completedObjTitles.push(obj.title);
+    }
+    return {
+      ...obj,
+      progress: Math.min(obj.targetValue, nextProgress),
+      completed: nowDone,
+    };
+  });
+
+  const unlockedMap: Record<string, string> = { ...(career.unlockedAchievements ?? {}) };
+  const newlyUnlockedAchIds: string[] = [];
+  const tryUnlock = (id: string) => {
+    if (!unlockedMap[id]) {
+      unlockedMap[id] = new Date().toISOString();
+      newlyUnlockedAchIds.push(id);
+    }
+  };
+  if (playerHeatRank === 1) tryUnlock('first-heat-win');
+  if (playerBestWaveInHeat >= 8.0) tryUnlock('excellent-wave');
+  if (playerBestWaveInHeat >= 9.0) tryUnlock('nine-club');
+  if (maxSeqInHeat >= 3) tryUnlock('flow-combo');
+  if (maxBarrelInHeat >= 1.5) tryUnlock('barrel-master');
+  if (heatRivalry.settledHeadToHead && heatRivalry.bonusPrize > 0) tryUnlock('rivalry-victor');
+
+  const achRepBonus = newlyUnlockedAchIds.reduce((sum, id) => {
+    const def = CAREER_ACHIEVEMENTS_CATALOG.find((a) => a.id === id);
+    return sum + (def?.repReward ?? 0);
+  }, 0);
+
+  const prevMilestones = t.recentMilestones;
+  const mergedMilestones: TournamentMilestoneSummary = {
+    unlockedAchievements: Array.from(
+      new Set([...(prevMilestones?.unlockedAchievements ?? []), ...newlyUnlockedAchIds])
+    ),
+    completedObjectives: Array.from(
+      new Set([...(prevMilestones?.completedObjectives ?? []), ...completedObjTitles])
+    ),
+    earnedTitles: [...(prevMilestones?.earnedTitles ?? [])],
+  };
+
   const careerWithHeatRivalry: CareerSaveState = {
     ...career,
-    prizeBalance: career.prizeBalance + heatRivalry.bonusPrize,
-    totalCareerEarnings: career.totalCareerEarnings + heatRivalry.bonusPrize,
-    reputation: career.reputation + heatRivalry.bonusRep,
+    prizeBalance: career.prizeBalance + heatRivalry.bonusPrize + heatObjPrize,
+    totalCareerEarnings: career.totalCareerEarnings + heatRivalry.bonusPrize + heatObjPrize,
+    reputation: career.reputation + heatRivalry.bonusRep + heatObjRep + achRepBonus,
     rivalries: heatRivalry.rivalries,
     rivalryNotifications: heatRivalry.notifications,
+    unlockedAchievements: unlockedMap,
+    careerObjectives: nextObjectives,
+    maxSequenceInCareer: Math.max(career.maxSequenceInCareer ?? 0, maxSeqInHeat),
+    longestBarrelInCareer: Math.max(career.longestBarrelInCareer ?? 0, roundToTenth(maxBarrelInHeat)),
     activeTournament: {
       ...t,
       headToHeadSettledInEvent: t.headToHeadSettledInEvent || heatRivalry.settledHeadToHead,
+      recentMilestones: mergedMilestones,
     },
   };
 
@@ -1428,7 +1766,8 @@ export function finalizePlayerHeat(
         simHeats,
         simRound,
         careerWithHeatRivalry.tier,
-        careerWithHeatRivalry.opponents
+        careerWithHeatRivalry.opponents,
+        event
       );
       const nextSettledHeats: HeatMatch[] = built.heats.map((h) => {
         const advCount = h.competitors.length >= 4 ? 2 : 1;
@@ -1478,7 +1817,8 @@ export function advanceTournamentToNextRound(career: CareerSaveState): CareerSav
   const t = career.activeTournament;
   if (!t || !t.heatCompletedAwaitingNext) return career;
 
-  const built = buildNextRoundHeats(t.heats, t.currentRound, career.tier, career.opponents);
+  const event = career.calendar.find((e) => e.id === t.eventId);
+  const built = buildNextRoundHeats(t.heats, t.currentRound, career.tier, career.opponents, event);
   const playerHeatIndex = Math.max(
     0,
     built.heats.findIndex((h) => h.competitors.some((c) => c.isPlayer))
@@ -1533,16 +1873,21 @@ export function advanceToNextSeason(career: CareerSaveState): CareerSaveState {
       })
     : career.rivalries ?? [];
 
+  const nextCalendar = generateSeasonCalendar(nextTier, nextSeason);
+  const completedPrevObjectives = (career.careerObjectives ?? []).filter((o) => o.completed);
+  const freshObjectives = buildCareerObjectivesForTier(nextTier, nextSeason, nextCalendar);
+
   const next: CareerSaveState = {
     ...career,
     tier: nextTier,
     season: nextSeason,
     seasonPoints: 0,
     previousRank: 8,
-    calendar: generateSeasonCalendar(nextTier, nextSeason),
+    calendar: nextCalendar,
     opponents: nextOpponents,
     sponsors: nextSponsors,
     rivalries: nextRivalries,
+    careerObjectives: [...freshObjectives, ...completedPrevObjectives.slice(0, 6)],
     seasonSummaries: [summary, ...career.seasonSummaries],
     activeTournament: null,
     pendingSeasonSummary: null,

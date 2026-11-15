@@ -38,6 +38,8 @@ export interface CareerSurferCustomization {
   hairColor: string;
 }
 
+export type AISurfStyleFocus = 'technical' | 'barrel' | 'allround';
+
 export interface AISurfer {
   id: string;
   name: string;
@@ -48,6 +50,7 @@ export interface AISurfer {
   barrelSkill: number; // 0..1
   airSkill: number; // 0..1
   consistency: number; // 0..1
+  styleFocus?: AISurfStyleFocus;
   style: string;
   suitColor: string;
   accentColor: string;
@@ -123,8 +126,12 @@ export interface HeatCompetitor {
   isPlayer: boolean;
   skillLevel: number;
   style: string;
+  styleFocus?: AISurfStyleFocus;
   suitColor: string;
   accentColor: string;
+  skinTone?: string;
+  hairColor?: string;
+  stance?: 'Regular' | 'Goofy';
   waves: HeatWaveRecord[];
   bestTwoTotal: number;
   heatRank: number;
@@ -146,6 +153,12 @@ export interface RoundSummary {
   heats: HeatMatch[];
 }
 
+export interface TournamentMilestoneSummary {
+  unlockedAchievements: string[]; // achievement ids
+  completedObjectives: string[]; // objective titles
+  earnedTitles: string[]; // title names
+}
+
 export interface ActiveTournamentState {
   eventId: string;
   tier: CareerTierId;
@@ -160,6 +173,7 @@ export interface ActiveTournamentState {
   finalResult?: CareerEventResult;
   headToHeadRivalId?: string;
   headToHeadSettledInEvent?: boolean;
+  recentMilestones?: TournamentMilestoneSummary;
 }
 
 export type SponsorObjectiveType = 'semis' | 'podiums' | 'win' | 'highWave' | 'events';
@@ -263,6 +277,54 @@ export interface RivalryNotification {
   seen: boolean;
 }
 
+export interface CareerReputationLevel {
+  id: string;
+  title: string;
+  minRep: number;
+  nextRep: number | null;
+}
+
+export interface CareerAchievementDef {
+  id: string;
+  title: string;
+  description: string;
+  category: 'bateria' | 'manobras' | 'carreira' | 'elite';
+  repReward: number;
+}
+
+export type CareerObjectiveKind =
+  | 'heat_score'
+  | 'sequence_chain'
+  | 'excellent_wave'
+  | 'barrel_time'
+  | 'reach_final'
+  | 'win_peak'
+  | 'beat_rival';
+
+export interface CareerObjective {
+  id: string;
+  title: string;
+  description: string;
+  kind: CareerObjectiveKind;
+  targetValue: number;
+  targetBeachId?: string;
+  progress: number;
+  completed: boolean;
+  rewardPrize: number;
+  rewardRep: number;
+  tier: CareerTierId;
+}
+
+export interface CareerTitleRecord {
+  id: string;
+  season: number;
+  tier: CareerTierId;
+  title: string;
+  eventName?: string;
+  kind: 'event_title' | 'division_champion' | 'world_champion';
+  earnedAt: string;
+}
+
 export interface CareerSaveState {
   version: number;
   createdAt: string;
@@ -291,6 +353,11 @@ export interface CareerSaveState {
   pendingSeasonSummary: SeasonSummary | null;
   rivalries?: RivalryRecord[];
   rivalryNotifications?: RivalryNotification[];
+  unlockedAchievements?: Record<string, string>; // achievementId -> ISO date
+  careerObjectives?: CareerObjective[];
+  titlesWon?: CareerTitleRecord[];
+  maxSequenceInCareer?: number;
+  longestBarrelInCareer?: number;
 }
 
 export interface LiveCareerHeatHUD {
@@ -305,6 +372,44 @@ export interface LiveCareerHeatHUD {
   topRivalName: string;
   topRivalTotal: number;
   advancingCount: number;
+  neededToAdvance: number | null;
+  opponentsSummary: Array<{
+    id: string;
+    name: string;
+    nationalityCode: string;
+    bestTwoTotal: number;
+    heatRank: number;
+    isH2HRival?: boolean;
+  }>;
   isHeadToHeadDuel?: boolean;
   rivalNameInHeat?: string;
+}
+
+export interface CareerCutsceneInfo {
+  heatKey: string;
+  eventName: string;
+  location: string;
+  beachName: string;
+  weatherLabel: string;
+  waveHeightLabel: string;
+  swellConditions: string;
+  roundLabel: string;
+  durationSec: number;
+  seed: number;
+  isFinal: boolean;
+  isHeadToHead: boolean;
+  competitors: Array<{
+    id: string;
+    name: string;
+    nationalityCode: string;
+    isPlayer: boolean;
+    style: string;
+    skillLevel: number;
+    suitColor: string;
+    accentColor: string;
+    skinTone: string;
+    hairColor: string;
+    stance: 'Regular' | 'Goofy';
+    isH2HRival?: boolean;
+  }>;
 }

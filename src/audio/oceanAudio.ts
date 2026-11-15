@@ -781,6 +781,70 @@ class OceanAudioEngine {
     osc.stop(now + 0.085);
   }
 
+  /**
+   * Subtle coastal atmosphere & championship broadcast audio cues during pre-heat cutscenes.
+   */
+  public playCutsceneStageCue(stage: number, seed = 0) {
+    if (!this.ready() || !this.ctx || !this.noiseBuffer || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+
+    if (stage === 1 || stage === 4) {
+      // Gentle warm chord pad swell to anchor the championship intro without overpowering the ocean
+      const freqs = stage === 1 ? [196, 293.66, 392] : [220, 329.63, 440];
+      const transpose = seed % 2 === 0 ? 1.0 : 1.05946;
+      for (let i = 0; i < freqs.length; i++) {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freqs[i] * transpose, now);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.linearRampToValueAtTime(0.032 / (i + 1), now + 0.45);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.9);
+        osc.connect(gain);
+        gain.connect(this.sfxGain);
+        osc.start(now);
+        osc.stop(now + 1.95);
+      }
+    }
+
+    if (stage === 1 || stage === 2) {
+      // Soft distant seabird / coastal wind sweep
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.loop = true;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(stage === 1 ? 620 : 480, now);
+      filter.frequency.exponentialRampToValueAtTime(stage === 1 ? 340 : 280, now + 1.4);
+      filter.Q.value = 1.4;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.09, now + 0.35);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.5);
+      src.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.sfxGain);
+      src.start(now, Math.random() * 2.0);
+      src.stop(now + 1.55);
+    }
+
+    if (stage === 6) {
+      // Crisp subtle start-heat horn tone
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, now);
+      osc.frequency.exponentialRampToValueAtTime(659.25, now + 0.25);
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.065, now + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
+      osc.connect(gain);
+      gain.connect(this.sfxGain);
+      osc.start(now);
+      osc.stop(now + 0.7);
+    }
+  }
+
   public dispose() {
     if (this.lfoOsc) {
       try {

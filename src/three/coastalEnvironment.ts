@@ -474,22 +474,26 @@ export function createCoastalEnvironment(textures: ProceduralTextureSet): Coasta
  * 4. Textured EVA tail traction pad
  * 5. Beveled fiberglass fins (Thruster, Twin, or Single + 2)
  */
-export function createSurfboardGroup(spec: SurfboardSpec): THREE.Group {
+export interface SurfboardBuildOptions {
+  castShadows?: boolean;
+  lightweightMaterial?: boolean;
+}
+
+export function createSurfboardGroup(
+  spec: SurfboardSpec,
+  options?: SurfboardBuildOptions
+): THREE.Group {
+  const castShadows = options?.castShadows ?? true;
+  const lightweight = options?.lightweightMaterial ?? false;
   const boardGroup = new THREE.Group();
 
   const boardLength = 2.05 * spec.lengthScale;
   const halfWidth = 0.26 * spec.widthScale;
   const thickness = 0.058;
 
-  // 1. Sculpted Hull using parametric grid lofting
-  const segU = 18; // across width
-  const segV = 36; // nose to tail
-  const hullGeo = new THREE.PlaneGeometry(1, 1, segU, segV);
-  const pos = hullGeo.attributes.position;
-
   // Build closed top + bottom deck by constructing a custom extruded surfboard outline
   const shape = new THREE.Shape();
-  const steps = 40;
+  const steps = lightweight ? 26 : 40;
   const outlinePoints: [number, number][] = [];
 
   for (let i = 0; i <= steps; i++) {
@@ -527,8 +531,8 @@ export function createSurfboardGroup(spec: SurfboardSpec): THREE.Group {
     bevelEnabled: true,
     bevelThickness: 0.016,
     bevelSize: 0.018,
-    bevelSegments: 4,
-    curveSegments: 24,
+    bevelSegments: lightweight ? 2 : 4,
+    curveSegments: lightweight ? 12 : 24,
   });
   extrudeGeo.rotateX(-Math.PI / 2);
   // Apply realistic surfboard rocker curve (nose lift & subtle tail lift)
@@ -541,18 +545,22 @@ export function createSurfboardGroup(spec: SurfboardSpec): THREE.Group {
     ePos.setY(i, ePos.getY(i) + noseRocker + tailRocker);
   }
   extrudeGeo.computeVertexNormals();
-  hullGeo.dispose();
-  void pos;
 
-  const hullMat = new THREE.MeshPhysicalMaterial({
-    color: spec.hullColor,
-    roughness: 0.18,
-    metalness: 0.02,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.08,
-  });
+  const hullMat = lightweight
+    ? new THREE.MeshStandardMaterial({
+        color: spec.hullColor,
+        roughness: 0.22,
+        metalness: 0.04,
+      })
+    : new THREE.MeshPhysicalMaterial({
+        color: spec.hullColor,
+        roughness: 0.18,
+        metalness: 0.02,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.08,
+      });
   const hullMesh = new THREE.Mesh(extrudeGeo, hullMat);
-  hullMesh.castShadow = true;
+  hullMesh.castShadow = castShadows;
   hullMesh.receiveShadow = true;
   boardGroup.add(hullMesh);
 
@@ -577,12 +585,18 @@ export function createSurfboardGroup(spec: SurfboardSpec): THREE.Group {
 
   // 3. Accent Deck Pin-Line Stripe
   const stripeGeo = new THREE.BoxGeometry(halfWidth * 0.58, 0.004, boardLength * 0.42);
-  const stripeMat = new THREE.MeshPhysicalMaterial({
-    color: spec.railColor,
-    roughness: 0.22,
-    metalness: 0.05,
-    clearcoat: 0.9,
-  });
+  const stripeMat = lightweight
+    ? new THREE.MeshStandardMaterial({
+        color: spec.railColor,
+        roughness: 0.25,
+        metalness: 0.06,
+      })
+    : new THREE.MeshPhysicalMaterial({
+        color: spec.railColor,
+        roughness: 0.22,
+        metalness: 0.05,
+        clearcoat: 0.9,
+      });
   const stripeMesh = new THREE.Mesh(stripeGeo, stripeMat);
   stripeMesh.position.set(0, thickness + 0.017, boardLength * 0.06);
   boardGroup.add(stripeMesh);
@@ -597,7 +611,7 @@ export function createSurfboardGroup(spec: SurfboardSpec): THREE.Group {
   const padMesh = new THREE.Mesh(padGeo, padMat);
   padMesh.position.set(0, thickness + 0.025, -boardLength * 0.34);
   padMesh.rotation.x = -0.05;
-  padMesh.castShadow = true;
+  padMesh.castShadow = castShadows;
   boardGroup.add(padMesh);
 
   // Tail kick ridge
@@ -616,7 +630,7 @@ export function createSurfboardGroup(spec: SurfboardSpec): THREE.Group {
 
   const finGeo = new THREE.ExtrudeGeometry(finShape, {
     depth: 0.007,
-    bevelEnabled: true,
+    bevelEnabled: !lightweight,
     bevelThickness: 0.002,
     bevelSize: 0.002,
     bevelSegments: 2,

@@ -27,6 +27,11 @@ import {
   createSurfboardGroup,
 } from './coastalEnvironment';
 import { createMarineLifeSystem, MarineLifeSystem } from './marineLifeSystem';
+import {
+  CareerHeatNpcSpec,
+  createNpcSurferSystem,
+  NpcSurferSystem,
+} from './npcSurferSystem';
 import { createOceanSystem, getBeachHeightAt, OceanSystem } from './oceanShader';
 import { createProceduralTextures, ProceduralTextureSet } from './proceduralTextures';
 import { createRainSystem, RainSystem } from './rainSystem';
@@ -51,6 +56,8 @@ const _tpQuat = new THREE.Quaternion();
 const _tpLookMat = new THREE.Matrix4();
 const _fpPos = new THREE.Vector3();
 const _fpQuat = new THREE.Quaternion();
+const _cutCamPos = new THREE.Vector3();
+const _cutLookTarget = new THREE.Vector3();
 const _prevCamPos = new THREE.Vector3(-4, 4.4, 24);
 const _camDelta = new THREE.Vector3();
 const _camFwd = new THREE.Vector3();
@@ -260,6 +267,8 @@ export interface SceneUpdatePayload {
   marineLifeEnabled: boolean;
   weatherMode: WeatherMode;
   startInWater?: boolean;
+  careerOpponents?: CareerHeatNpcSpec[] | null;
+  cutsceneRequest?: { key: string; seed: number } | null;
 }
 
 export class SurfSceneManager {
@@ -279,6 +288,7 @@ export class SurfSceneManager {
   private marineLife: MarineLifeSystem;
   private barrelCurl: BarrelCurlSystem;
   private surferRig: SurferRig;
+  private npcSurfers: NpcSurferSystem;
   private waterParticles: WaterParticleSystem;
   private rainSystem: RainSystem;
   private physics: SurfPhysicsEngine;
@@ -395,6 +405,18 @@ export class SurfSceneManager {
   private savedLiveWave: SurfWaveParams | null = null;
   private replayHudEmitAccum = 0;
 
+  // Career Heat Opponents & Pre-Heat Cinematic Cutscene
+  private careerOpponentsActive = false;
+  private cutsceneActive = false;
+  private cutsceneKey = '';
+  private cutsceneTime = 0;
+  private cutsceneSeed = 0;
+  private cutsceneStage = 1;
+  private cutsceneStageProgress = 0;
+  private cutscenePrevStage = 0;
+  private lastLaunchedCutsceneKey = '';
+  private onCutsceneComplete?: (key: string) => void;
+
   private onContextLostCallback?: (lost: boolean) => void;
 
   constructor(
@@ -404,11 +426,13 @@ export class SurfSceneManager {
     initialSurfer: SurferProfile,
     initialGraphics: GraphicsSettings,
     onHudUpdate?: (hud: SurfHUDState) => void,
-    onContextLost?: (lost: boolean) => void
+    onContextLost?: (lost: boolean) => void,
+    onCutsceneComplete?: (key: string) => void
   ) {
     this.container = container;
     this.onHudUpdate = onHudUpdate;
     this.onContextLostCallback = onContextLost;
+    this.onCutsceneComplete = onCutsceneComplete;
     this.isSoftwareGl = detectSoftwareWebGL();
     this.targetEnv = { ...initialEnv };
     this.graphics = { ...initialGraphics };
@@ -534,6 +558,9 @@ export class SurfSceneManager {
     this.surferRig.root.visible = false;
     this.scene.add(this.surferRig.root);
 
+    this.npcSurfers = createNpcSurferSystem();
+    this.scene.add(this.npcSurfers.group);
+
     this.waterParticles = createWaterParticleSystem();
     this.waterParticles.mesh.visible = false;
     this.scene.add(this.waterParticles.mesh);
@@ -559,7 +586,7 @@ export class SurfSceneManager {
     this.applyGraphicsSettings(initialGraphics, true);
     this.applySunAndAtmosphere(0);
 
-    // Pre-compile all shaders up-front (including hidden gameplay objects) to eliminate runtime stutters
+    // Pre-compile all shaders up-front (including hidden gameplay & NPC objects) to eliminate runtime stutters
     if (!this.isSoftwareGl) {
       const prevCurl = this.barrelCurl.mesh.visible;
       const prevSurfer = this.surferRig.root.visible;
@@ -567,11 +594,13 @@ export class SurfSceneManager {
       const prevRain = this.rainSystem.mesh.visible;
       this.barrelCurl.mesh.visible = true;
       this.surferRig.root.visible = true;
+      this.npcSurfers.setEnabled(true);
       this.waterParticles.mesh.visible = true;
       this.rainSystem.mesh.visible = true;
       this.renderer.compile(this.scene, this.camera);
       this.barrelCurl.mesh.visible = prevCurl;
       this.surferRig.root.visible = prevSurfer;
+      this.npcSurfers.setEnabled(false);
       this.waterParticles.mesh.visible = prevParticles;
       this.rainSystem.mesh.visible = prevRain;
     }
@@ -612,8 +641,10 @@ export class SurfSceneManager {
     this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (this.activePointers.size === 2 && canPinch) {
-      const pts = Array.from(this.activePointers.values());
-      this.lastPinchDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      const it = this.activePointers.values();
+      const p0 = it.next().value!;
+      const p1 = it.next().value!;
+      this.lastPinchDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
       this.dragPointerId = null;
     } else if (this.dragPointerId === null) {
       this.dragPointerId = e.pointerId;
@@ -643,8 +674,10 @@ export class SurfSceneManager {
 
     // Two-finger pinch zoom in orbit angles
     if (this.activePointers.size === 2 && canPinch) {
-      const pts = Array.from(this.activePointers.values());
-      const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      const it = this.activePointers.values();
+      const p0 = it.next().value!;
+      const p1 = it.next().value!;
+      const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
       if (this.lastPinchDist > 0) {
         const delta = this.lastPinchDist - dist;
         this.camZoomTarget = THREE.MathUtils.clamp(
@@ -829,11 +862,17 @@ export class SurfSceneManager {
       this.ocean.material.uniforms.uReflections.value = next.reflectionsEnabled ? 1.0 : 0.0;
     }
 
+    if (force || next.preset !== prev.preset) {
+      this.npcSurfers.setQualityPreset(next.preset);
+    }
+
     if (shadowChanged) {
       const enabled = !this.isSoftwareGl && next.shadowQuality !== 'off';
       this.renderer.shadowMap.enabled = enabled;
       this.sunLight.castShadow = enabled;
       if (enabled) {
+        this.renderer.shadowMap.type =
+          next.shadowQuality === 'low' ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
         const size = this.getShadowMapSize(next.shadowQuality);
         if (this.sunLight.shadow.mapSize.x !== size) {
           this.sunLight.shadow.mapSize.set(size, size);
@@ -905,6 +944,10 @@ export class SurfSceneManager {
     }
     this.replayBuffer.clear();
     this.physics.resetSession(this.targetEnv, this.lastStartInWater);
+    this.npcSurfers.setEnabled(this.shouldEnableNpcs());
+    if (this.shouldEnableNpcs()) {
+      this.npcSurfers.resetLineup(this.physics.waveParams, this.physics.state.position);
+    }
     this.waterParticles.reset();
     this.impactBlur = 0;
     this.lensDroplets = 0;
@@ -961,6 +1004,7 @@ export class SurfSceneManager {
     this.waterParticles.reset();
 
     this.replayActive = true;
+    this.npcSurfers.setEnabled(false);
     this.paused = false;
     this.camLookYaw = 0;
     this.camLookPitch = 0;
@@ -977,6 +1021,7 @@ export class SurfSceneManager {
   public exitReplay() {
     if (!this.replayActive) return;
     this.replayActive = false;
+    this.npcSurfers.setEnabled(this.shouldEnableNpcs());
 
     if (this.savedLiveState) {
       this.physics.state = this.savedLiveState;
@@ -1053,6 +1098,92 @@ export class SurfSceneManager {
     this.setReplayAngle(order[nextIdx]);
   }
 
+  private shouldEnableNpcs(): boolean {
+    return !this.lastStartInWater || this.careerOpponentsActive;
+  }
+
+  public setCutsceneCompleteHandler(handler?: (key: string) => void) {
+    this.onCutsceneComplete = handler;
+  }
+
+  public skipCutscene() {
+    if (!this.cutsceneActive) return;
+    this.completeCutscene();
+  }
+
+  public restartCareerHeatInWater() {
+    if (this.replayActive) {
+      this.replayActive = false;
+      this.savedLiveState = null;
+      this.savedLiveWave = null;
+    }
+    this.cutsceneActive = false;
+    this.paused = false;
+    this.replayBuffer.clear();
+    this.physics.resetSession(this.targetEnv, true);
+    this.npcSurfers.setEnabled(this.shouldEnableNpcs());
+    if (this.shouldEnableNpcs()) {
+      this.npcSurfers.resetLineup(this.physics.waveParams, this.physics.state.position);
+    }
+    this.waterParticles.reset();
+    this.impactBlur = 0;
+    this.lensDroplets = 0;
+    this.whitewaterWash = 0;
+    this.underwaterBlend = 0;
+    this.slowMoGray = 0;
+    this.shakeTrauma = 0;
+    this.cachedCompletedWavesLen = -1;
+    this.tpFollowHeading = Math.PI;
+    this.camLookYaw = 0;
+    this.camLookPitch = 0;
+    this.camZoom = 1.0;
+    this.camLookYawTarget = 0;
+    this.camLookPitchTarget = 0;
+    this.camZoomTarget = 1.0;
+    this.mouseLookYaw = 0;
+    this.mouseLookPitch = 0;
+    this.mouseLookYawTarget = 0;
+    this.mouseLookPitchTarget = 0;
+    this.dragPointerId = null;
+    this.activePointers.clear();
+    this.lastPinchDist = 0;
+    this.surferRig.setFirstPersonMode(this.cameraMode === 'firstPerson');
+    this.fpBlend = this.cameraMode === 'firstPerson' ? 1 : 0;
+    this.emitHudState(true);
+  }
+
+  private completeCutscene() {
+    const finishedKey = this.cutsceneKey;
+    this.cutsceneActive = false;
+    this.cutsceneStage = 6;
+    this.cutsceneStageProgress = 1;
+    this.physics.finishCutsceneToLineup();
+    this.npcSurfers.setEnabled(this.shouldEnableNpcs());
+    if (this.shouldEnableNpcs()) {
+      this.npcSurfers.resetLineup(this.physics.waveParams, this.physics.state.position);
+    }
+    this.waterParticles.reset();
+    this.surferRig.setFirstPersonMode(this.cameraMode === 'firstPerson');
+    this.fpBlend = this.cameraMode === 'firstPerson' ? 1 : 0;
+    this.tpFollowHeading = Math.PI;
+    this.camLookYaw = 0;
+    this.camLookPitch = 0;
+    this.camZoom = 1.0;
+    this.camLookYawTarget = 0;
+    this.camLookPitchTarget = 0;
+    this.camZoomTarget = 1.0;
+    this.mouseLookYaw = 0;
+    this.mouseLookPitch = 0;
+    this.mouseLookYawTarget = 0;
+    this.mouseLookPitchTarget = 0;
+    this.dragPointerId = null;
+    this.activePointers.clear();
+    this.emitHudState(true);
+    if (finishedKey) {
+      this.onCutsceneComplete?.(finishedKey);
+    }
+  }
+
   public updateState(payload: SceneUpdatePayload) {
     const wasSurfing = this.screen === 'surfing';
     const isNowSurfing = payload.screen === 'surfing';
@@ -1072,6 +1203,9 @@ export class SurfSceneManager {
     this.cameraMode = payload.cameraMode;
     this.weatherMode = payload.weatherMode;
     this.lastStartInWater = Boolean(payload.startInWater);
+    this.careerOpponentsActive = Boolean(
+      payload.careerOpponents && payload.careerOpponents.length > 0
+    );
 
     if (cameraModeChanged) {
       // Recenter view cleanly when switching between 1P and 3P
@@ -1094,16 +1228,60 @@ export class SurfSceneManager {
     this.beachLife.setConfig(payload.beachAtmosphere, payload.beachTheme);
     this.marineLife.setEnabled(payload.marineLifeEnabled);
 
-    if (!wasSurfing && isNowSurfing) {
+    if (isNowSurfing) {
+      this.npcSurfers.configureCareerHeatOpponents(
+        payload.careerOpponents ?? null,
+        this.physics.waveParams,
+        this.physics.state.position
+      );
+    } else if (wasSurfing) {
+      this.npcSurfers.configureCareerHeatOpponents(null, this.physics.waveParams);
+    }
+
+    const reqCutscene = isNowSurfing ? payload.cutsceneRequest : null;
+    const shouldStartCutscene = Boolean(
+      reqCutscene && reqCutscene.key !== this.lastLaunchedCutsceneKey
+    );
+
+    if ((!wasSurfing && isNowSurfing) || shouldStartCutscene) {
       this.replayActive = false;
       this.savedLiveState = null;
       this.savedLiveWave = null;
       this.replayBuffer.clear();
       this.physics.resetSession(payload.beachEnv, Boolean(payload.startInWater));
+
+      const enableNpcs = this.shouldEnableNpcs();
+      this.npcSurfers.setEnabled(enableNpcs);
+      if (enableNpcs) {
+        this.npcSurfers.resetLineup(this.physics.waveParams, this.physics.state.position);
+      }
+
+      if (shouldStartCutscene && reqCutscene) {
+        this.lastLaunchedCutsceneKey = reqCutscene.key;
+        this.cutsceneActive = true;
+        this.cutsceneKey = reqCutscene.key;
+        this.cutsceneSeed = reqCutscene.seed;
+        this.cutsceneTime = 0;
+        this.cutsceneStage = 1;
+        this.cutsceneStageProgress = 0;
+        this.cutscenePrevStage = 0;
+        this.physics.stepCutscene(0.016, 1, 0);
+        this.npcSurfers.setEnabled(true);
+        this.npcSurfers.stepCutsceneFormation(
+          0.016,
+          this.physics.waveParams.simTime,
+          this.physics.waveParams,
+          1,
+          0
+        );
+      } else if (!wasSurfing && isNowSurfing) {
+        this.cutsceneActive = false;
+      }
+
       this.waterParticles.reset();
       this.surferRig.root.visible = true;
-      this.surferRig.setFirstPersonMode(this.cameraMode === 'firstPerson');
-      this.fpBlend = this.cameraMode === 'firstPerson' ? 1 : 0;
+      this.surferRig.setFirstPersonMode(!this.cutsceneActive && this.cameraMode === 'firstPerson');
+      this.fpBlend = !this.cutsceneActive && this.cameraMode === 'firstPerson' ? 1 : 0;
       this.waterParticles.mesh.visible = true;
       this.boardAnchor.visible = false;
       this.impactBlur = 0;
@@ -1131,8 +1309,11 @@ export class SurfSceneManager {
       _tpCurPos.copy(this.camera.position);
       this.emitHudState(true);
     } else if (wasSurfing && !isNowSurfing) {
+      this.cutsceneActive = false;
+      this.lastLaunchedCutsceneKey = '';
       this.replayActive = false;
       this.replayBuffer.clear();
+      this.npcSurfers.setEnabled(false);
       this.surferRig.root.visible = false;
       this.surferRig.setFirstPersonMode(false);
       this.fpBlend = 0;
@@ -1228,7 +1409,8 @@ export class SurfSceneManager {
     const overcast = this.weatherOvercast;
     const rain = this.weatherRain;
 
-    const phi = THREE.MathUtils.degToRad(90 - env.sunElevation);
+    const sunElevBoost = this.cutsceneActive ? ((this.cutsceneSeed % 3) - 1) * 2.2 : 0;
+    const phi = THREE.MathUtils.degToRad(90 - (env.sunElevation + sunElevBoost));
     const theta = THREE.MathUtils.degToRad(env.sunAzimuth);
     _sunDir.setFromSphericalCoords(1, phi, theta).normalize();
 
@@ -1332,6 +1514,11 @@ export class SurfSceneManager {
     if (this.lastPausedEmitted) {
       this.lastPausedEmitted = false;
       this.emitHudState(true);
+    }
+
+    if (this.cutsceneActive) {
+      this.updatePreHeatCutscene(rawDt);
+      return;
     }
 
     const s = this.physics.state;
@@ -1454,6 +1641,7 @@ export class SurfSceneManager {
     );
 
     this.surferRig.animate(s, wp.simTime, Math.max(0.001, simDt));
+    this.npcSurfers.update(simDt, wp.simTime, wp, s, this.camera.position, this.waterParticles);
     this.waterParticles.update(simDt, s);
 
     const slowMoThresholdCrossed =
@@ -1464,6 +1652,108 @@ export class SurfSceneManager {
     if (this.hudEmitAccum >= 0.075 || s.calloutId !== this.lastCalloutId || slowMoThresholdCrossed) {
       this.hudEmitAccum = 0;
       this.lastCalloutId = s.calloutId;
+      this.emitHudState(false, sample.section);
+    }
+  }
+
+  private updatePreHeatCutscene(rawDt: number) {
+    const TOTAL_DURATION = 13.5;
+    this.cutsceneTime += rawDt;
+
+    if (this.cutsceneTime >= TOTAL_DURATION) {
+      this.completeCutscene();
+      return;
+    }
+
+    const t = this.cutsceneTime;
+    let stage = 1;
+    let stageStart = 0;
+    let stageDur = 2.4;
+    if (t < 2.4) {
+      stage = 1;
+      stageStart = 0;
+      stageDur = 2.4;
+    } else if (t < 4.8) {
+      stage = 2;
+      stageStart = 2.4;
+      stageDur = 2.4;
+    } else if (t < 7.6) {
+      stage = 3;
+      stageStart = 4.8;
+      stageDur = 2.8;
+    } else if (t < 9.8) {
+      stage = 4;
+      stageStart = 7.6;
+      stageDur = 2.2;
+    } else if (t < 11.8) {
+      stage = 5;
+      stageStart = 9.8;
+      stageDur = 2.0;
+    } else {
+      stage = 6;
+      stageStart = 11.8;
+      stageDur = 1.7;
+    }
+
+    this.cutsceneStage = stage;
+    this.cutsceneStageProgress = THREE.MathUtils.clamp((t - stageStart) / stageDur, 0, 1);
+
+    if (stage !== this.cutscenePrevStage) {
+      this.cutscenePrevStage = stage;
+      oceanAudio.playCutsceneStageCue(stage, this.cutsceneSeed);
+    }
+
+    const s = this.physics.state;
+    const wp = this.physics.waveParams;
+    const sample = this.physics.stepCutscene(rawDt, stage, this.cutsceneStageProgress);
+
+    if (s.paddleStrokePulse) {
+      oceanAudio.playPaddleStrokeSound(false);
+    }
+    oceanAudio.updateSurfTelemetry(
+      stage <= 2 ? 4.5 : s.speed,
+      0.15,
+      false,
+      0,
+      true,
+      this.weatherRain,
+      0
+    );
+
+    const oceanU = this.ocean.material.uniforms;
+    oceanU.uSurfMode.value = THREE.MathUtils.damp(oceanU.uSurfMode.value, 1.0, 8, rawDt);
+    oceanU.uSurfSimTime.value = wp.simTime;
+    oceanU.uWaveCenterZ.value = wp.waveCenterZ;
+    oceanU.uSurfWaveHeight.value = wp.waveHeight;
+    oceanU.uSurfWaveSpeed.value = wp.waveSpeed;
+    oceanU.uSurfSteepness.value = wp.steepness;
+    oceanU.uBreakX.value = wp.breakX;
+    oceanU.uBreakDir.value = wp.breakDir;
+    oceanU.uWaveLengthZ.value = wp.waveLengthZ;
+
+    this.barrelCurl.update(
+      wp,
+      oceanU.uShallowColor.value,
+      oceanU.uDeepColor.value,
+      _sunDir,
+      this.weatherOvercast,
+      this.weatherRain
+    );
+
+    this.surferRig.setFirstPersonMode(false);
+    this.surferRig.animate(s, wp.simTime, Math.max(0.001, rawDt));
+    this.npcSurfers.stepCutsceneFormation(
+      rawDt,
+      wp.simTime,
+      wp,
+      stage,
+      this.cutsceneStageProgress
+    );
+    this.waterParticles.update(rawDt, s);
+
+    this.hudEmitAccum += rawDt;
+    if (this.hudEmitAccum >= 0.075) {
+      this.hudEmitAccum = 0;
       this.emitHudState(false, sample.section);
     }
   }
@@ -1493,16 +1783,21 @@ export class SurfSceneManager {
       lastCallout: s.lastCallout,
       lastQuality: s.lastQuality,
       calloutId: s.calloutId,
+      sequenceChain: s.sequenceChain,
+      maxSequenceChain: Math.max(s.maxSequenceChain, s.sequenceChain),
+      sequenceTag: s.sequenceTag,
+      sequenceTier: s.sequenceTier,
       waveNumber: s.waveNumber,
       currentWavePoints: s.currentWavePoints,
       currentWaveManeuvers: s.currentWaveManeuvers,
       currentWaveBestManeuver: s.currentWaveBestManeuver,
       currentWaveBarrelTime: s.currentWaveBarrelTime,
       completedWaves: this.cachedCompletedWavesRef,
-      availability: this.replayActive
-        ? { bottomTurn: false, cutback: false, floater: false, air: false, duckDive: false }
-        : this.physics.getManeuverAvailability(),
-      isPaused: this.paused && !this.replayActive,
+      availability:
+        this.replayActive || this.cutsceneActive
+          ? { bottomTurn: false, cutback: false, floater: false, air: false, duckDive: false }
+          : this.physics.getManeuverAvailability(),
+      isPaused: this.paused && !this.replayActive && !this.cutsceneActive,
       cameraMode: this.cameraMode,
       cameraModified:
         Math.abs(this.camLookYawTarget) > 0.04 ||
@@ -1514,6 +1809,11 @@ export class SurfSceneManager {
       rainIntensity: this.weatherRain,
       maneuverSlowMo: this.slowMoGray,
       postFxActive,
+      cutsceneActive: this.cutsceneActive,
+      cutsceneStage: this.cutsceneStage,
+      cutsceneProgress: this.cutsceneActive
+        ? THREE.MathUtils.clamp(this.cutsceneTime / 13.5, 0, 1)
+        : 0,
       replay: {
         active: this.replayActive,
         playing: this.replayPlaying,
@@ -1636,7 +1936,121 @@ export class SurfSceneManager {
     );
   }
 
+  private updateCutsceneCamera(rawDt: number) {
+    const s = this.physics.state;
+    const wp = this.physics.waveParams;
+    const p = this.cutsceneStageProgress;
+    const smoothP = p * p * (3 - 2 * p);
+    const dir = this.cutsceneSeed % 2 === 0 ? 1 : -1;
+    const varAngle = ((this.cutsceneSeed % 5) - 2) * 0.65;
+
+    let targetFov = 46;
+    if (this.cutsceneStage === 1) {
+      // Coastal peak flyover sweeping over beach & lineup
+      _cutCamPos.set(
+        THREE.MathUtils.lerp(-24 * dir + varAngle, 16 * dir, smoothP),
+        THREE.MathUtils.lerp(13.5, 9.2, smoothP),
+        THREE.MathUtils.lerp(28, 12, smoothP)
+      );
+      _cutLookTarget.set(2 * dir, 1.4, -36);
+      targetFov = 48;
+    } else if (this.cutsceneStage === 2) {
+      // Low glide framing sea conditions & approaching wave curl
+      const waveZ = THREE.MathUtils.clamp(wp.waveCenterZ, -95, -18);
+      _cutCamPos.set(
+        wp.breakX + THREE.MathUtils.lerp(-18 * dir, 14 * dir, smoothP),
+        3.2 + wp.waveHeight * 0.45,
+        waveZ + 18
+      );
+      _cutLookTarget.set(wp.breakX, wp.waveHeight * 0.45, waveZ - 4);
+      targetFov = 44;
+    } else if (this.cutsceneStage === 3) {
+      // Close-up pass across player & AI competitors in shallow water
+      _cutCamPos.set(
+        THREE.MathUtils.lerp(-11 * dir, 10 * dir, smoothP),
+        1.85,
+        s.position.z - 5.2
+      );
+      _cutLookTarget.set(s.position.x + 1.2 * dir, s.position.y + 0.85, s.position.z);
+      targetFov = 40;
+    } else if (this.cutsceneStage === 4) {
+      // Broadcast mid-angle framing surfers looking out to sea
+      _cutCamPos.set(
+        s.position.x + 8.5 * dir * (1 - smoothP * 0.35),
+        3.4,
+        s.position.z + 9.0
+      );
+      _cutLookTarget.set(s.position.x, 1.35, -24);
+      targetFov = 46;
+    } else if (this.cutsceneStage === 5) {
+      // Surfers paddling out toward lineup
+      _cutCamPos.set(
+        s.position.x + THREE.MathUtils.lerp(6.5 * dir, 2.2 * dir, smoothP),
+        THREE.MathUtils.lerp(3.2, 2.1, smoothP),
+        s.position.z + THREE.MathUtils.lerp(7.5, 5.2, smoothP)
+      );
+      _cutLookTarget.set(s.position.x, s.position.y + 0.75, s.position.z - 4.0);
+      targetFov = 48;
+    } else {
+      // Stage 6: smooth blend right into the exact live gameplay 3P/1P pose
+      const shoulderOffset = wp.breakDir;
+      const followPosX = s.position.x + shoulderOffset * 1.1;
+      const followPosY = s.position.y + 1.65;
+      const followPosZ = s.position.z + 4.1;
+      _cutCamPos.set(
+        THREE.MathUtils.lerp(s.position.x + 2.2 * dir, followPosX, smoothP),
+        THREE.MathUtils.lerp(2.1, followPosY, smoothP),
+        THREE.MathUtils.lerp(s.position.z + 5.2, followPosZ, smoothP)
+      );
+      _cutLookTarget.set(
+        THREE.MathUtils.lerp(s.position.x, s.position.x + shoulderOffset * 0.75, smoothP),
+        s.position.y + 0.9,
+        THREE.MathUtils.lerp(s.position.z - 4.0, s.position.z - 1.6, smoothP)
+      );
+      targetFov = THREE.MathUtils.lerp(48, this.cameraMode === 'firstPerson' ? 62 : 48, smoothP);
+    }
+
+    const safeMinY = this.getSafeCameraMinY(
+      _cutCamPos.x,
+      _cutCamPos.z,
+      s.position.x,
+      s.position.z,
+      0.85
+    );
+    _cutCamPos.y = Math.max(_cutCamPos.y, safeMinY);
+
+    const dampLambda = this.cutsceneStage === 6 ? 7.5 : 4.2;
+    this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, _cutCamPos.x, dampLambda, rawDt);
+    this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, _cutCamPos.y, dampLambda, rawDt);
+    this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, _cutCamPos.z, dampLambda, rawDt);
+    _tpCurPos.copy(this.camera.position);
+    _prevCamPos.copy(this.camera.position);
+
+    _currentLook.x = THREE.MathUtils.damp(_currentLook.x, _cutLookTarget.x, 5.2, rawDt);
+    _currentLook.y = THREE.MathUtils.damp(_currentLook.y, _cutLookTarget.y, 5.2, rawDt);
+    _currentLook.z = THREE.MathUtils.damp(_currentLook.z, _cutLookTarget.z, 5.2, rawDt);
+    this.camera.lookAt(_currentLook);
+
+    const nextFov = THREE.MathUtils.damp(this.camera.fov, targetFov, 3.8, rawDt);
+    if (Math.abs(nextFov - this.camera.fov) > 0.01) {
+      this.camera.fov = nextFov;
+      this.camera.updateProjectionMatrix();
+    }
+
+    this.currentBlur = THREE.MathUtils.damp(this.currentBlur, 0, 6, rawDt);
+    this.impactBlur = THREE.MathUtils.damp(this.impactBlur, 0, 6, rawDt);
+    this.lensDroplets = THREE.MathUtils.damp(this.lensDroplets, 0, 4, rawDt);
+    this.whitewaterWash = THREE.MathUtils.damp(this.whitewaterWash, 0, 6, rawDt);
+    this.underwaterBlend = THREE.MathUtils.damp(this.underwaterBlend, 0, 6, rawDt);
+    this.slowMoGray = THREE.MathUtils.damp(this.slowMoGray, 0, 7, rawDt);
+    this.syncPostFxUniforms();
+  }
+
   private updateSurfCamera(rawDt: number) {
+    if (this.cutsceneActive) {
+      this.updateCutsceneCamera(rawDt);
+      return;
+    }
     const s = this.physics.state;
     const wp = this.physics.waveParams;
     const camDt = rawDt * (0.5 + 0.5 * s.timeScale);
@@ -1975,8 +2389,13 @@ export class SurfSceneManager {
       this.currentEnv.windStrength,
       this.currentEnv.waveSpeed
     );
-    this.beachLife.update(this.elapsedTime, this.currentEnv.windStrength);
-    this.marineLife.update(this.elapsedTime, rawDt, s.position, wp);
+    this.beachLife.update(
+      this.elapsedTime,
+      this.currentEnv.windStrength,
+      this.camera.position.z,
+      this.underwaterBlend
+    );
+    this.marineLife.update(this.elapsedTime, rawDt, s.position, wp, this.camera.position);
 
     this.updateReplayCamera(rawDt);
     this.rainSystem.update(
@@ -2147,8 +2566,12 @@ export class SurfSceneManager {
       this.updateWeather(dt);
 
       if (this.screen === 'surfing' && this.replayActive) {
+        this.renderer.shadowMap.autoUpdate = true;
         this.updateReplayPlayback(dt);
       } else {
+        const isFrozenPause = this.screen === 'surfing' && this.paused;
+        this.renderer.shadowMap.autoUpdate = !isFrozenPause;
+
         if (this.screen === 'surfing') {
           this.updateSurfingGameplay(dt);
           if (!this.paused) {
@@ -2158,39 +2581,54 @@ export class SurfSceneManager {
           this.elapsedTime += dt;
         }
 
-        this.applySunAndAtmosphere(dt);
-        this.coast.update(
-          this.elapsedTime,
-          this.currentEnv.windStrength + this.weatherRain * 0.45,
-          this.currentEnv.waveSpeed
-        );
-        const { volleyballHitPulse } = this.beachLife.update(
-          this.elapsedTime,
-          this.currentEnv.windStrength + this.weatherRain * 0.45
-        );
-        if (this.screen !== 'surfing') {
-          oceanAudio.updateSurfTelemetry(0, 0, false, 0, false, this.weatherRain);
-        }
-        if (volleyballHitPulse && this.underwaterBlend < 0.25) {
-          const distToCourt = Math.hypot(
-            this.camera.position.x - 19.5,
-            this.camera.position.z - 27.8
+        if (!isFrozenPause) {
+          this.applySunAndAtmosphere(dt);
+          this.coast.update(
+            this.elapsedTime,
+            this.currentEnv.windStrength + this.weatherRain * 0.45,
+            this.currentEnv.waveSpeed
           );
-          if (distToCourt < 56) {
-            oceanAudio.playVolleyballHit(THREE.MathUtils.clamp(1 - distToCourt / 56, 0.08, 0.85));
+          const { volleyballHitPulse } = this.beachLife.update(
+            this.elapsedTime,
+            this.currentEnv.windStrength + this.weatherRain * 0.45,
+            dt,
+            this.camera.position.z,
+            this.underwaterBlend
+          );
+          if (this.screen !== 'surfing') {
+            oceanAudio.updateSurfTelemetry(0, 0, false, 0, false, this.weatherRain);
+          }
+          if (volleyballHitPulse && this.underwaterBlend < 0.25) {
+            const distToCourt = Math.hypot(
+              this.camera.position.x - 19.5,
+              this.camera.position.z - 27.8
+            );
+            if (distToCourt < 56) {
+              oceanAudio.playVolleyballHit(THREE.MathUtils.clamp(1 - distToCourt / 56, 0.08, 0.85));
+            }
+          }
+          const activeSurferPos = this.screen === 'surfing' ? this.physics.state.position : null;
+          const activeWave = this.screen === 'surfing' ? this.physics.waveParams : null;
+          this.marineLife.update(
+            this.elapsedTime,
+            dt,
+            activeSurferPos,
+            activeWave,
+            this.camera.position
+          );
+          this.updateCamera(dt);
+          this.rainSystem.update(
+            dt,
+            this.camera.position,
+            this.weatherRain,
+            this.currentEnv.windStrength + this.weatherRain * 0.5,
+            this.underwaterBlend > 0.35
+          );
+        } else {
+          if (this.screen !== 'surfing') {
+            oceanAudio.updateSurfTelemetry(0, 0, false, 0, false, this.weatherRain);
           }
         }
-        const activeSurferPos = this.screen === 'surfing' ? this.physics.state.position : null;
-        const activeWave = this.screen === 'surfing' ? this.physics.waveParams : null;
-        this.marineLife.update(this.elapsedTime, dt, activeSurferPos, activeWave);
-        this.updateCamera(dt);
-        this.rainSystem.update(
-          dt,
-          this.camera.position,
-          this.weatherRain,
-          this.currentEnv.windStrength + this.weatherRain * 0.5,
-          this.underwaterBlend > 0.35
-        );
       }
 
       if (this.boardMeshGroup && this.boardAnchor.visible) {
@@ -2242,6 +2680,7 @@ export class SurfSceneManager {
     this.marineLife.dispose();
     this.barrelCurl.dispose();
     this.surferRig.dispose();
+    this.npcSurfers.dispose();
     this.waterParticles.dispose();
     this.rainSystem.dispose();
     this.sky.mesh.geometry.dispose();

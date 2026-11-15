@@ -12,12 +12,13 @@ interface SprayParticle {
 export interface WaterParticleSystem {
   mesh: THREE.InstancedMesh;
   setQualityScale: (scale: number) => void;
+  emitNpcSpray: (simDt: number, state: SurferPhysicsState, intensityScale?: number) => void;
   update: (simDt: number, state: SurferPhysicsState) => void;
   reset: () => void;
   dispose: () => void;
 }
 
-const MAX_PARTICLES = 320;
+const MAX_PARTICLES = 380;
 const _dummy = new THREE.Object3D();
 
 /**
@@ -52,6 +53,7 @@ export function createWaterParticleSystem(): WaterParticleSystem {
 
   let activeCount = 0;
   let emitAccum = 0;
+  let npcEmitAccum = 0;
   let qualityScale = 1.0;
 
   const setQualityScale = (scale: number) => {
@@ -86,8 +88,60 @@ export function createWaterParticleSystem(): WaterParticleSystem {
 
   const reset = () => {
     emitAccum = 0;
+    npcEmitAccum = 0;
     activeCount = 0;
     mesh.count = 0;
+  };
+
+  const emitNpcSpray = (simDt: number, state: SurferPhysicsState, intensityScale = 0.55) => {
+    if (intensityScale <= 0.05 || simDt <= 0) return;
+
+    if (
+      (state.phase === 'riding' || state.phase === 'maneuver' || state.phase === 'barrel') &&
+      state.speed > 5.0
+    ) {
+      const rate = (16 + state.carvingIntensity * 42) * qualityScale * intensityScale;
+      npcEmitAccum = Math.min(npcEmitAccum + simDt * rate, 4);
+      const tailDirX = -Math.sin(state.heading);
+      const tailDirZ = -Math.cos(state.heading);
+
+      while (npcEmitAccum >= 1) {
+        npcEmitAccum -= 1;
+        const spread = (Math.random() - 0.5) * 0.55;
+        const fanSide = -Math.sign(state.roll || 1) * (0.45 + state.carvingIntensity * 1.8);
+        spawn(
+          state.position.x + tailDirX * 0.8 + (Math.random() - 0.5) * 0.2,
+          state.position.y + 0.08,
+          state.position.z + tailDirZ * 0.8 + (Math.random() - 0.5) * 0.2,
+          tailDirX * (2.2 + state.speed * 0.18) + fanSide + spread,
+          1.2 + state.carvingIntensity * 2.2 + Math.random() * 1.1,
+          tailDirZ * (2.2 + state.speed * 0.18) + spread,
+          0.38 + Math.random() * 0.28,
+          0.5 + Math.random() * 0.65
+        );
+      }
+    }
+
+    if (state.justSplashed) {
+      const burstCount = Math.max(
+        2,
+        Math.round(12 * state.splashIntensity * qualityScale * intensityScale)
+      );
+      for (let b = 0; b < burstCount; b++) {
+        const ang = Math.random() * Math.PI * 2;
+        const spd = (1.6 + Math.random() * 3.6) * state.splashIntensity;
+        spawn(
+          state.position.x + Math.cos(ang) * 0.3,
+          state.position.y + 0.1,
+          state.position.z + Math.sin(ang) * 0.3,
+          Math.cos(ang) * spd,
+          (2.0 + Math.random() * 3.4) * state.splashIntensity,
+          Math.sin(ang) * spd,
+          0.45 + Math.random() * 0.35,
+          0.65 + Math.random() * 0.8
+        );
+      }
+    }
   };
 
   const update = (simDt: number, state: SurferPhysicsState) => {
@@ -97,7 +151,7 @@ export function createWaterParticleSystem(): WaterParticleSystem {
       state.speed > 4.5
     ) {
       const rate = (38 + state.carvingIntensity * 95) * qualityScale;
-      emitAccum += simDt * rate;
+      emitAccum = Math.min(emitAccum + simDt * rate, 10);
       const tailDirX = -Math.sin(state.heading);
       const tailDirZ = -Math.cos(state.heading);
 
@@ -117,7 +171,7 @@ export function createWaterParticleSystem(): WaterParticleSystem {
         );
       }
     } else if ((state.phase === 'paddling' || state.phase === 'recovering') && state.speed > 0.75) {
-      emitAccum += simDt * (state.phase === 'recovering' ? 16 : 12);
+      emitAccum = Math.min(emitAccum + simDt * (state.phase === 'recovering' ? 16 : 12), 6);
       while (emitAccum >= 1) {
         emitAccum -= 1;
         const side = Math.sin(state.paddleStrokePhase) >= 0 ? 1 : -1;
@@ -196,6 +250,7 @@ export function createWaterParticleSystem(): WaterParticleSystem {
   return {
     mesh,
     setQualityScale,
+    emitNpcSpray,
     update,
     reset,
     dispose: () => {
