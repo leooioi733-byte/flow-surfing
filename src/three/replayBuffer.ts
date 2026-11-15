@@ -3,6 +3,7 @@ import { ExecutionQuality, FallType, ManeuverType, SurfPhase } from '../types/ga
 import { SurferPhysicsState, SurfWaveParams } from './wavePhysics';
 
 export const MAX_REPLAY_SECONDS = 15.0;
+const RING_CAPACITY = 768; // ~16.5s at 45Hz + splash bursts
 
 export interface ReplayFrame {
   recordTime: number;
@@ -66,36 +67,115 @@ export interface ReplayFrame {
   calloutId: number;
 }
 
+function createEmptyFrame(): ReplayFrame {
+  return {
+    recordTime: 0,
+    elapsedTime: 0,
+    simTime: 0,
+    waveCenterZ: 0,
+    waveHeight: 0,
+    waveSpeed: 0,
+    steepness: 0,
+    power: 0,
+    breakX: 0,
+    breakDir: 1,
+    barrelFactor: 0,
+    waveLengthZ: 36,
+    posX: 0,
+    posY: 0,
+    posZ: 0,
+    heading: 0,
+    roll: 0,
+    pitch: 0,
+    boardNormalX: 0,
+    boardNormalY: 1,
+    boardNormalZ: 0,
+    phase: 'beachWalk',
+    speed: 0,
+    balance: 0,
+    paddleStrokePhase: 0,
+    duckDiveTimer: 0,
+    walkPhase: 0,
+    activeManeuver: null,
+    maneuverTimer: 0,
+    maneuverDuration: 1,
+    maneuverSpin: 0,
+    airHeight: 0,
+    inBarrel: false,
+    barrelTimer: 0,
+    fallType: 'sideways',
+    fallDir: 1,
+    fallIntensity: 0.5,
+    wipeoutTimer: 0,
+    submersionDepth: 0,
+    underwaterAmount: 0,
+    boardDetached: false,
+    boardPosX: 0,
+    boardPosY: 0,
+    boardPosZ: 0,
+    boardHeading: 0,
+    boardRoll: 0,
+    boardPitch: 0,
+    justSplashed: false,
+    splashIntensity: 0,
+    carvingIntensity: 0,
+    score: 0,
+    combo: 1,
+    waveNumber: 1,
+    timeScale: 1,
+    lastCallout: '',
+    lastQuality: null,
+    calloutId: 0,
+  };
+}
+
 function lerpAngle(a: number, b: number, t: number): number {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
   return a + diff * t;
 }
 
+/**
+ * Zero-GC fixed circular ring buffer storing the last 15 seconds of surf telemetry.
+ */
 export class ReplayBuffer {
-  private frames: ReplayFrame[] = [];
+  private ring: ReplayFrame[];
+  private head = 0; // Index of oldest valid frame
+  private count = 0;
   private recordClock = 0;
   private lastSampledClock = -1;
-  private lastSplashFrameIdx = -1;
+  private lastSplashOffset = -1;
+
+  constructor() {
+    this.ring = new Array<ReplayFrame>(RING_CAPACITY);
+    for (let i = 0; i < RING_CAPACITY; i++) {
+      this.ring[i] = createEmptyFrame();
+    }
+  }
+
+  private at(logicalIdx: number): ReplayFrame {
+    return this.ring[(this.head + logicalIdx) % RING_CAPACITY];
+  }
 
   public clear() {
-    this.frames.length = 0;
+    this.head = 0;
+    this.count = 0;
     this.recordClock = 0;
     this.lastSampledClock = -1;
-    this.lastSplashFrameIdx = -1;
+    this.lastSplashOffset = -1;
   }
 
   public getDuration(): number {
-    if (this.frames.length < 2) return 0;
-    return Math.max(0, this.frames[this.frames.length - 1].recordTime - this.frames[0].recordTime);
+    if (this.count < 2) return 0;
+    return Math.max(0, this.at(this.count - 1).recordTime - this.at(0).recordTime);
   }
 
   public hasClip(): boolean {
-    return this.frames.length >= 12 && this.getDuration() >= 0.75;
+    return this.count >= 12 && this.getDuration() >= 0.75;
   }
 
   public resetPlaybackCursor() {
-    this.lastSplashFrameIdx = -1;
+    this.lastSplashOffset = -1;
   }
 
   public record(
@@ -114,74 +194,79 @@ export class ReplayBuffer {
     }
     this.lastSampledClock = this.recordClock;
 
-    this.frames.push({
-      recordTime: this.recordClock,
-      elapsedTime,
-      simTime: wp.simTime,
-      waveCenterZ: wp.waveCenterZ,
-      waveHeight: wp.waveHeight,
-      waveSpeed: wp.waveSpeed,
-      steepness: wp.steepness,
-      power: wp.power,
-      breakX: wp.breakX,
-      breakDir: wp.breakDir,
-      barrelFactor: wp.barrelFactor,
-      waveLengthZ: wp.waveLengthZ,
-      posX: state.position.x,
-      posY: state.position.y,
-      posZ: state.position.z,
-      heading: state.heading,
-      roll: state.roll,
-      pitch: state.pitch,
-      boardNormalX: state.boardNormal.x,
-      boardNormalY: state.boardNormal.y,
-      boardNormalZ: state.boardNormal.z,
-      phase: state.phase,
-      speed: state.speed,
-      balance: state.balance,
-      paddleStrokePhase: state.paddleStrokePhase,
-      duckDiveTimer: state.duckDiveTimer,
-      walkPhase: state.walkPhase,
-      activeManeuver: state.activeManeuver,
-      maneuverTimer: state.maneuverTimer,
-      maneuverDuration: state.maneuverDuration,
-      maneuverSpin: state.maneuverSpin,
-      airHeight: state.airHeight,
-      inBarrel: state.inBarrel,
-      barrelTimer: state.barrelTimer,
-      fallType: state.fallType,
-      fallDir: state.fallDir,
-      fallIntensity: state.fallIntensity,
-      wipeoutTimer: state.wipeoutTimer,
-      submersionDepth: state.submersionDepth,
-      underwaterAmount: state.underwaterAmount,
-      boardDetached: state.boardDetached,
-      boardPosX: state.boardPos.x,
-      boardPosY: state.boardPos.y,
-      boardPosZ: state.boardPos.z,
-      boardHeading: state.boardHeading,
-      boardRoll: state.boardRoll,
-      boardPitch: state.boardPitch,
-      justSplashed: state.justSplashed,
-      splashIntensity: state.splashIntensity,
-      carvingIntensity: state.carvingIntensity,
-      score: state.score,
-      combo: state.combo,
-      waveNumber: state.waveNumber,
-      timeScale: state.timeScale,
-      lastCallout: state.lastCallout,
-      lastQuality: state.lastQuality,
-      calloutId: state.calloutId,
-    });
-
-    // Keep strictly the last 15 seconds (+0.15s margin for smooth endpoints)
-    const cutoff = this.recordClock - (MAX_REPLAY_SECONDS + 0.15);
-    let dropCount = 0;
-    while (this.frames.length - dropCount > 2 && this.frames[dropCount + 1].recordTime < cutoff) {
-      dropCount++;
+    let writeIdx: number;
+    if (this.count < RING_CAPACITY) {
+      writeIdx = (this.head + this.count) % RING_CAPACITY;
+      this.count++;
+    } else {
+      writeIdx = this.head;
+      this.head = (this.head + 1) % RING_CAPACITY;
     }
-    if (dropCount >= 24) {
-      this.frames.splice(0, dropCount);
+
+    const f = this.ring[writeIdx];
+    f.recordTime = this.recordClock;
+    f.elapsedTime = elapsedTime;
+    f.simTime = wp.simTime;
+    f.waveCenterZ = wp.waveCenterZ;
+    f.waveHeight = wp.waveHeight;
+    f.waveSpeed = wp.waveSpeed;
+    f.steepness = wp.steepness;
+    f.power = wp.power;
+    f.breakX = wp.breakX;
+    f.breakDir = wp.breakDir;
+    f.barrelFactor = wp.barrelFactor;
+    f.waveLengthZ = wp.waveLengthZ;
+    f.posX = state.position.x;
+    f.posY = state.position.y;
+    f.posZ = state.position.z;
+    f.heading = state.heading;
+    f.roll = state.roll;
+    f.pitch = state.pitch;
+    f.boardNormalX = state.boardNormal.x;
+    f.boardNormalY = state.boardNormal.y;
+    f.boardNormalZ = state.boardNormal.z;
+    f.phase = state.phase;
+    f.speed = state.speed;
+    f.balance = state.balance;
+    f.paddleStrokePhase = state.paddleStrokePhase;
+    f.duckDiveTimer = state.duckDiveTimer;
+    f.walkPhase = state.walkPhase;
+    f.activeManeuver = state.activeManeuver;
+    f.maneuverTimer = state.maneuverTimer;
+    f.maneuverDuration = state.maneuverDuration;
+    f.maneuverSpin = state.maneuverSpin;
+    f.airHeight = state.airHeight;
+    f.inBarrel = state.inBarrel;
+    f.barrelTimer = state.barrelTimer;
+    f.fallType = state.fallType;
+    f.fallDir = state.fallDir;
+    f.fallIntensity = state.fallIntensity;
+    f.wipeoutTimer = state.wipeoutTimer;
+    f.submersionDepth = state.submersionDepth;
+    f.underwaterAmount = state.underwaterAmount;
+    f.boardDetached = state.boardDetached;
+    f.boardPosX = state.boardPos.x;
+    f.boardPosY = state.boardPos.y;
+    f.boardPosZ = state.boardPos.z;
+    f.boardHeading = state.boardHeading;
+    f.boardRoll = state.boardRoll;
+    f.boardPitch = state.boardPitch;
+    f.justSplashed = state.justSplashed;
+    f.splashIntensity = state.splashIntensity;
+    f.carvingIntensity = state.carvingIntensity;
+    f.score = state.score;
+    f.combo = state.combo;
+    f.waveNumber = state.waveNumber;
+    f.timeScale = state.timeScale;
+    f.lastCallout = state.lastCallout;
+    f.lastQuality = state.lastQuality;
+    f.calloutId = state.calloutId;
+
+    // Advance head pointer past frames older than MAX_REPLAY_SECONDS (O(1) per dropped frame, zero GC)
+    const cutoff = this.recordClock - (MAX_REPLAY_SECONDS + 0.15);
+    while (this.count > 2 && this.at(1).recordTime < cutoff) {
+      this.head = (this.head + 1) % RING_CAPACITY;
+      this.count--;
     }
   }
 
@@ -189,21 +274,21 @@ export class ReplayBuffer {
    * Computes a steady shoreline telephoto camera anchor that frames the whole captured ride.
    */
   public computeBeachAnchor(out: THREE.Vector3) {
-    if (this.frames.length === 0) {
+    if (this.count === 0) {
       out.set(4, 3.6, 17);
       return;
     }
     let sumX = 0;
     let maxZ = -999;
     let maxH = 2.0;
-    for (let i = 0; i < this.frames.length; i++) {
-      const f = this.frames[i];
+    for (let i = 0; i < this.count; i++) {
+      const f = this.at(i);
       sumX += f.posX;
       if (f.posZ > maxZ) maxZ = f.posZ;
       if (f.waveHeight > maxH) maxH = f.waveHeight;
     }
-    const avgX = sumX / this.frames.length;
-    const last = this.frames[this.frames.length - 1];
+    const avgX = sumX / this.count;
+    const last = this.at(this.count - 1);
     const camZ = THREE.MathUtils.clamp(Math.max(14.5, maxZ + 12.0), 14.5, 30.0);
     const camX = avgX + last.breakDir * 6.5;
     out.set(camX, 2.85 + maxH * 0.45, camZ);
@@ -218,12 +303,12 @@ export class ReplayBuffer {
     outState: SurferPhysicsState,
     outWave: SurfWaveParams
   ): { elapsedTime: number } {
-    if (this.frames.length === 0) {
+    if (this.count === 0) {
       return { elapsedTime: 0 };
     }
 
-    const first = this.frames[0];
-    const last = this.frames[this.frames.length - 1];
+    const first = this.at(0);
+    const last = this.at(this.count - 1);
     const targetClock = THREE.MathUtils.clamp(
       first.recordTime + replayTime,
       first.recordTime,
@@ -232,26 +317,24 @@ export class ReplayBuffer {
 
     // Binary search for bracketing frame index
     let lo = 0;
-    let hi = this.frames.length - 1;
+    let hi = this.count - 1;
     while (lo + 1 < hi) {
       const mid = (lo + hi) >> 1;
-      if (this.frames[mid].recordTime <= targetClock) {
+      if (this.at(mid).recordTime <= targetClock) {
         lo = mid;
       } else {
         hi = mid;
       }
     }
 
-    const a = this.frames[lo];
-    const b = this.frames[Math.min(lo + 1, this.frames.length - 1)];
+    const a = this.at(lo);
+    const b = this.at(Math.min(lo + 1, this.count - 1));
     const span = Math.max(0.0001, b.recordTime - a.recordTime);
     const t = a === b ? 0 : THREE.MathUtils.clamp((targetClock - a.recordTime) / span, 0, 1);
 
-    // Prevent wave discontinuity interpolation if a new wave spawned mid-clip
     const sameWave = a.waveNumber === b.waveNumber && Math.abs(b.waveCenterZ - a.waveCenterZ) < 12;
     const ref = t < 0.5 ? a : b;
 
-    // Populate wave params
     outWave.enabled = true;
     outWave.simTime = sameWave ? THREE.MathUtils.lerp(a.simTime, b.simTime, t) : ref.simTime;
     outWave.waveCenterZ = sameWave
@@ -276,9 +359,9 @@ export class ReplayBuffer {
       ? THREE.MathUtils.lerp(a.waveLengthZ, b.waveLengthZ, t)
       : ref.waveLengthZ;
 
-    // Populate surfer & board state
     const blend = sameWave && Math.abs(b.posZ - a.posZ) < 6;
-    const lerpNum = (va: number, vb: number) => (blend ? THREE.MathUtils.lerp(va, vb, t) : t < 0.5 ? va : vb);
+    const lerpNum = (va: number, vb: number) =>
+      blend ? THREE.MathUtils.lerp(va, vb, t) : t < 0.5 ? va : vb;
 
     outState.position.set(
       lerpNum(a.posX, b.posX),
@@ -335,23 +418,20 @@ export class ReplayBuffer {
     outState.lastQuality = ref.lastQuality;
     outState.calloutId = ref.calloutId;
 
-    // Trigger particle splash bursts once when advancing past recorded splash frames
     outState.justSplashed = false;
     outState.splashIntensity = 0;
-    if (isPlayingForward && lo !== this.lastSplashFrameIdx) {
-      const startCheck = Math.max(0, this.lastSplashFrameIdx + 1);
+    if (isPlayingForward && lo !== this.lastSplashOffset) {
+      const startCheck = Math.max(0, this.lastSplashOffset + 1);
       for (let idx = startCheck; idx <= lo; idx++) {
-        if (this.frames[idx]?.justSplashed) {
+        const frame = this.at(idx);
+        if (frame.justSplashed) {
           outState.justSplashed = true;
-          outState.splashIntensity = Math.max(
-            outState.splashIntensity,
-            this.frames[idx].splashIntensity
-          );
+          outState.splashIntensity = Math.max(outState.splashIntensity, frame.splashIntensity);
         }
       }
-      this.lastSplashFrameIdx = lo;
+      this.lastSplashOffset = lo;
     } else if (!isPlayingForward) {
-      this.lastSplashFrameIdx = lo;
+      this.lastSplashOffset = lo;
     }
 
     return {

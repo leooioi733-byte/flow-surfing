@@ -88,7 +88,7 @@ export function sampleSurfWave(
 
   const { heightScale, steepScale, breakProgress } = getWaveShoaling(params.waveCenterZ);
 
-  const lateralDecay = Math.exp(-Math.pow((x - params.breakX * 0.4) / 145, 2));
+  const lateralDecay = Math.exp(-Math.pow((x - params.breakX) / 145, 2));
   const shoulderTaper = 1.0 - THREE.MathUtils.smoothstep(relBreak, 14, 72) * 0.42;
   const whitewaterDamp = 1.0 - THREE.MathUtils.smoothstep(-relBreak, 4, 28) * (0.14 + 0.22 * breakProgress);
   const localH = params.waveHeight * heightScale * lateralDecay * shoulderTaper * whitewaterDamp;
@@ -262,10 +262,18 @@ export interface SurferPhysicsState {
   lastQuality: ExecutionQuality | null;
   calloutId: number;
 
-  // Telemetry for particle emitters
+  // Telemetry for particle emitters & SFX events
   justSplashed: boolean;
   splashIntensity: number;
   carvingIntensity: number;
+  executedManeuverType: ManeuverType | null;
+  executedManeuverQuality: ExecutionQuality | null;
+  failedManeuver: boolean;
+  justCaughtWave: boolean;
+  justDuckDived: boolean;
+  justExitedBarrel: boolean;
+  paddleStrokePulse: boolean;
+  footstepPulse: boolean;
 }
 
 export class SurfPhysicsEngine {
@@ -379,6 +387,14 @@ export class SurfPhysicsEngine {
       justSplashed: false,
       splashIntensity: 0,
       carvingIntensity: 0,
+      executedManeuverType: null,
+      executedManeuverQuality: null,
+      failedManeuver: false,
+      justCaughtWave: false,
+      justDuckDived: false,
+      justExitedBarrel: false,
+      paddleStrokePulse: false,
+      footstepPulse: false,
     };
   }
 
@@ -444,30 +460,23 @@ export class SurfPhysicsEngine {
     s.currentWaveBarrelTime = 0;
   }
 
-  private spawnNextWave(fromShore = false, keepPhase: 'paddling' | 'recovering' = 'paddling') {
+  private spawnNextWave(
+    fromShore = false,
+    keepPhase: 'paddling' | 'recovering' | 'beachWalk' = 'paddling'
+  ) {
     const s = this.state;
-    if (keepPhase === 'paddling') {
+    if (keepPhase !== 'recovering') {
       this.commitCurrentWaveIfScored();
     }
     const wNum = s.waveNumber + 1;
     s.waveNumber = wNum;
 
     const nextParams = this.createWaveParams(this.beachEnv, wNum, this.waveParams.simTime);
-    const surferZ = fromShore ? -22 : THREE.MathUtils.clamp(s.position.z, -46, -12);
-    nextParams.waveCenterZ = THREE.MathUtils.clamp(surferZ - 76, -158, -88);
+    const surferZ = fromShore ? -22 : THREE.MathUtils.clamp(s.position.z, -165, 10);
+    nextParams.waveCenterZ = THREE.MathUtils.clamp(surferZ - 76, -240, -88);
     nextParams.breakX = s.position.x - nextParams.breakDir * 13;
     this.waveParams = nextParams;
     s.isBigBarrelWave = nextParams.waveHeight >= 3.2;
-
-    if (!fromShore && s.position.z > -4) {
-      const shiftZ = -28 - s.position.z;
-      s.position.z = -28;
-      s.position.x = THREE.MathUtils.clamp(s.position.x, -26, 26);
-      s.boardPos.z += shiftZ;
-      s.boardPos.x = THREE.MathUtils.clamp(s.boardPos.x, -30, 30);
-      this.waveParams.waveCenterZ = THREE.MathUtils.clamp(s.position.z - 76, -158, -88);
-      this.waveParams.breakX = s.position.x - nextParams.breakDir * 13;
-    }
 
     s.phase = keepPhase;
     s.catchProgress = 0;
@@ -487,12 +496,14 @@ export class SurfPhysicsEngine {
     s.slowMoHoldTimer = 0;
     this.whitewaterExposure = 0;
 
-    if (keepPhase === 'paddling') {
+    if (keepPhase === 'paddling' || keepPhase === 'beachWalk') {
       s.boardDetached = false;
-      this.triggerCallout(
-        s.isBigBarrelWave ? `Heavy Barrel Set · Wave ${wNum}` : `Wave ${wNum} incoming`,
-        null
-      );
+      if (keepPhase === 'paddling') {
+        this.triggerCallout(
+          s.isBigBarrelWave ? `Heavy Barrel Set · Wave ${wNum}` : `Wave ${wNum} incoming`,
+          null
+        );
+      }
     }
   }
 
@@ -580,6 +591,14 @@ export class SurfPhysicsEngine {
     s.impactEventIntensity = 0;
     s.impactWhitewater = 0;
     s.justResurfaced = false;
+    s.executedManeuverType = null;
+    s.executedManeuverQuality = null;
+    s.failedManeuver = false;
+    s.justCaughtWave = false;
+    s.justDuckDived = false;
+    s.justExitedBarrel = false;
+    s.paddleStrokePulse = false;
+    s.footstepPulse = false;
 
     const baseWaveTimeScale =
       s.phase === 'beachWalk' ||
@@ -679,7 +698,7 @@ export class SurfPhysicsEngine {
       s.boardPitch = s.pitch;
     }
 
-    // Check if wave closed out while riding
+    // Check if wave closed out or washed all the way onto shallow sand while riding
     const beachDepth = -getBeachHeightAt(s.position.x, s.position.z);
     if (
       s.phase !== 'beachWalk' &&
@@ -687,10 +706,15 @@ export class SurfPhysicsEngine {
       s.phase !== 'duckDive' &&
       s.phase !== 'wipeout' &&
       s.phase !== 'recovering' &&
-      (wp.waveCenterZ > 10.5 || beachDepth < 0.45)
+      (wp.waveCenterZ > 12.5 || beachDepth < 0.25)
     ) {
-      this.triggerCallout('Wave closed out — paddling back out', null);
-      this.spawnNextWave(false, 'paddling');
+      if (beachDepth < 0.25) {
+        this.triggerCallout('Washed ashore — explore the coast freely', null);
+        this.spawnNextWave(false, 'beachWalk');
+      } else {
+        this.triggerCallout('Wave finished — paddle freely for the next set', null);
+        this.spawnNextWave(false, 'paddling');
+      }
     } else if (
       (s.phase === 'paddling' || s.phase === 'duckDive') &&
       s.position.z - wp.waveCenterZ < -22
@@ -716,11 +740,8 @@ export class SurfPhysicsEngine {
 
     s.boardPos.x += s.boardVel.x * dt;
     s.boardPos.z += s.boardVel.z * dt;
-    s.boardPos.x = THREE.MathUtils.clamp(s.boardPos.x, -45, 65);
-    if (s.boardPos.z > 8.8) {
-      s.boardPos.z = 8.8;
-      s.boardVel.z = Math.min(0, s.boardVel.z);
-    }
+    s.boardPos.x = THREE.MathUtils.clamp(s.boardPos.x, -185, 185);
+    s.boardPos.z = THREE.MathUtils.clamp(s.boardPos.z, -165, 76);
 
     // Keep board within reasonable swimming distance so recovery always feels fair & cozy
     const dx = s.boardPos.x - s.position.x;
@@ -733,7 +754,13 @@ export class SurfPhysicsEngine {
     }
 
     const contact = this.sampleBoardContact(s.boardPos.x, s.boardPos.z, s.boardHeading, wp);
-    s.boardPos.y = THREE.MathUtils.damp(s.boardPos.y, contact.avgY + 0.035, 14, dt);
+    const boardBeachY = getBeachHeightAt(s.boardPos.x, s.boardPos.z);
+    s.boardPos.y = THREE.MathUtils.damp(
+      s.boardPos.y,
+      Math.max(boardBeachY + 0.04, contact.avgY + 0.035),
+      14,
+      dt
+    );
     s.boardHeading += Math.sin(wp.simTime * 1.8) * 0.25 * dt;
     s.boardRoll = THREE.MathUtils.damp(
       s.boardRoll,
@@ -761,6 +788,7 @@ export class SurfPhysicsEngine {
   ) {
     const s = this.state;
 
+    const prevWalkStep = Math.floor(s.walkPhase / Math.PI);
     if (isFirstPerson) {
       // In 1P, left/right steers smoothly without feeding back into camera yaw
       if (Math.abs(input.moveX) > 0.08) {
@@ -768,7 +796,7 @@ export class SurfPhysicsEngine {
       }
       const fwdMag = THREE.MathUtils.clamp(input.moveY, -1, 1);
       const turnWalkMag = Math.abs(input.moveX) > 0.12 && Math.abs(fwdMag) < 0.15 ? 0.35 : 0;
-      const moveSpeed = 4.2 * Math.max(Math.abs(fwdMag), turnWalkMag);
+      const moveSpeed = 4.8 * Math.max(Math.abs(fwdMag), turnWalkMag);
       if (Math.abs(fwdMag) > 0.08) {
         const dirSign = fwdMag >= 0 ? 1 : -1;
         s.velocity.x = THREE.MathUtils.damp(s.velocity.x, Math.sin(s.heading) * dirSign * moveSpeed, 9, dt);
@@ -785,7 +813,7 @@ export class SurfPhysicsEngine {
       const moveVecZ = camRightZ * input.moveX + camFwdZ * input.moveY;
       const inputMag = Math.min(1, Math.hypot(input.moveX, input.moveY));
 
-      const walkSpeed = 4.2 * inputMag;
+      const walkSpeed = 4.8 * inputMag;
       if (inputMag > 0.08) {
         const targetHeading = Math.atan2(moveVecX, moveVecZ);
         s.heading = lerpAngle(s.heading, targetHeading, 1 - Math.exp(-10 * dt));
@@ -799,9 +827,12 @@ export class SurfPhysicsEngine {
 
     s.position.x += s.velocity.x * dt;
     s.position.z += s.velocity.z * dt;
-    s.position.x = THREE.MathUtils.clamp(s.position.x, -26, 26);
-    s.position.z = THREE.MathUtils.clamp(s.position.z, -4, 24);
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -115, 76);
     s.speed = Math.hypot(s.velocity.x, s.velocity.z);
+    if (s.speed > 0.45 && Math.floor(s.walkPhase / Math.PI) !== prevWalkStep) {
+      s.footstepPulse = true;
+    }
 
     const beachY = getBeachHeightAt(s.position.x, s.position.z);
     const waterDepth = sample.height - beachY;
@@ -812,20 +843,19 @@ export class SurfPhysicsEngine {
     s.submersionDepth = 0;
     s.underwaterAmount = 0;
 
-    if (waterDepth > 0.36 || s.position.z < 9.5) {
+    if (waterDepth > 0.38) {
       s.phase = 'paddling';
-      s.heading = Math.PI;
       s.justSplashed = true;
       s.splashIntensity = 0.55;
       s.impactEventIntensity = 0.25;
-      if (this.waveParams.waveCenterZ > -18) {
-        this.waveParams.waveCenterZ = -126;
+      if (this.waveParams.waveCenterZ > s.position.z - 12) {
+        this.waveParams.waveCenterZ = THREE.MathUtils.clamp(s.position.z - 92, -230, -96);
         this.waveParams.breakX = s.position.x - this.waveParams.breakDir * 14;
       }
       this.triggerCallout(
         this.state.isBigBarrelWave
           ? 'Big barrel set ahead — paddle out'
-          : 'In the water — paddle for the wave',
+          : 'In the water — explore or paddle for the wave',
         null
       );
     }
@@ -844,12 +874,15 @@ export class SurfPhysicsEngine {
     const s = this.state;
     const wp = this.waveParams;
 
+    let isPaddlingActively = false;
     if (isFirstPerson) {
       if (Math.abs(input.moveX) > 0.08) {
         s.heading -= input.moveX * 2.15 * dt;
       }
       if (Math.abs(input.moveY) > 0.08) {
-        const paddleForce = 16.5 * input.moveY;
+        isPaddlingActively = true;
+        // Relaxed, realistic flat-water paddle (~46 km/h) so wave slope provides the push over 50 km/h
+        const paddleForce = 14.8 * input.moveY;
         s.velocity.x += Math.sin(s.heading) * paddleForce * dt;
         s.velocity.z += Math.cos(s.heading) * paddleForce * dt;
       }
@@ -859,9 +892,10 @@ export class SurfPhysicsEngine {
       const inputMag = Math.min(1, Math.hypot(input.moveX, input.moveY));
 
       if (inputMag > 0.08) {
+        isPaddlingActively = true;
         const targetHeading = Math.atan2(moveVecX, moveVecZ);
         s.heading = lerpAngle(s.heading, targetHeading, 1 - Math.exp(-6.5 * dt));
-        const paddleForce = 16.5 * inputMag;
+        const paddleForce = 14.8 * inputMag;
         s.velocity.x += Math.sin(s.heading) * paddleForce * dt;
         s.velocity.z += Math.cos(s.heading) * paddleForce * dt;
       }
@@ -870,25 +904,48 @@ export class SurfPhysicsEngine {
     s.velocity.multiplyScalar(Math.exp(-1.9 * dt));
 
     const dz = s.position.z - wp.waveCenterZ;
-    if (dz > -3.5 && dz < 11.0) {
-      const slopeAccel = 11.0 * sample.slopeSteepness;
+    if (dz > -3.0 && dz < 11.5) {
+      // Natural downward wave-face gravity surge carries a shore-angled surfer smoothly past 50 km/h
+      const shoreAlign = Math.max(0.25, Math.cos(s.heading) * 0.65 + 0.55);
+      const slopeAccel = 15.8 * sample.slopeSteepness * shoreAlign;
       s.velocity.z += slopeAccel * dt;
-      s.velocity.x += wp.breakDir * slopeAccel * 0.4 * dt;
+      s.velocity.x += wp.breakDir * slopeAccel * 0.42 * dt;
     }
 
     s.position.x += s.velocity.x * dt;
     s.position.z += s.velocity.z * dt;
-    s.position.x = THREE.MathUtils.clamp(s.position.x, -45, 65);
-    const minWaterZ = 9.0;
-    if (s.position.z > minWaterZ) {
-      s.position.z = minWaterZ;
-      s.velocity.z = Math.min(0, s.velocity.z);
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -165, 76);
+
+    const prevPaddleStroke = Math.floor(s.paddleStrokePhase / Math.PI);
+    const contact = this.sampleBoardContact(s.position.x, s.position.z, s.heading, wp);
+    const beachY = getBeachHeightAt(s.position.x, s.position.z);
+    const waterDepth = contact.avgY - beachY;
+    if (waterDepth < 0.16) {
+      s.phase = 'beachWalk';
+      s.catchProgress = 0;
+      s.position.y = Math.max(beachY, contact.avgY - 0.12);
+      s.boardNormal.set(0, 1, 0);
+      s.pitch = 0;
+      s.roll = 0;
+      s.submersionDepth = 0;
+      s.underwaterAmount = 0;
+      s.speed = Math.hypot(s.velocity.x, s.velocity.z);
+      this.triggerCallout('On the beach — explore freely', null);
+      return;
     }
 
-    const contact = this.sampleBoardContact(s.position.x, s.position.z, s.heading, wp);
-    s.position.y = THREE.MathUtils.damp(s.position.y, contact.avgY + 0.03, 14, dt);
+    s.position.y = THREE.MathUtils.damp(
+      s.position.y,
+      Math.max(beachY + 0.02, contact.avgY + 0.03),
+      14,
+      dt
+    );
     s.speed = Math.hypot(s.velocity.x, s.velocity.z);
-    s.paddleStrokePhase += dt * (2.8 + s.speed * 0.45);
+    s.paddleStrokePhase += dt * (2.6 + s.speed * 0.42);
+    if (isPaddlingActively && Math.floor(s.paddleStrokePhase / Math.PI) !== prevPaddleStroke) {
+      s.paddleStrokePulse = true;
+    }
 
     s.boardNormal.lerp(contact.blendedNormal, 1 - Math.exp(-10 * dt));
     s.pitch = THREE.MathUtils.damp(s.pitch, 0, 8, dt);
@@ -898,8 +955,8 @@ export class SurfPhysicsEngine {
 
     // Light chop splash if wave whitewater washes past while paddling
     if (sample.section === 'whitewater' && this.sprayImpactCooldown <= 0) {
-      s.impactEventIntensity = 0.28;
-      s.impactWhitewater = 0.35;
+      s.impactEventIntensity = 0.24;
+      s.impactWhitewater = 0.32;
       this.sprayImpactCooldown = 1.1;
     }
 
@@ -909,8 +966,9 @@ export class SurfPhysicsEngine {
       s.duckDiveBonusAwarded = false;
       s.catchProgress = 0;
       s.justSplashed = true;
+      s.justDuckDived = true;
       s.splashIntensity = 0.58;
-      s.impactEventIntensity = 0.22;
+      s.impactEventIntensity = 0.2;
       const diveHeading = Math.cos(s.heading) > 0.2 ? Math.PI : s.heading;
       s.heading = diveHeading;
       s.velocity.x += Math.sin(diveHeading) * 3.4;
@@ -921,25 +979,28 @@ export class SurfPhysicsEngine {
 
     const speedKmh = Math.round(s.speed * SURF_SPEED_KMH_FACTOR);
     const onWaveFace =
-      dz >= -0.8 && dz <= 9.0 && sample.slopeSteepness > 0.16 && s.velocity.z > 0.5;
+      dz >= -1.2 && dz <= 9.8 && sample.slopeSteepness > 0.14 && s.velocity.z > 0.35;
     if (onWaveFace && speedKmh >= 50) {
-      s.catchProgress += dt * (4.2 + sample.slopeSteepness * 2.2);
+      s.catchProgress += dt * (4.8 + sample.slopeSteepness * 2.4);
       if (s.catchProgress >= 1.0) {
         s.phase = 'takeoff';
         s.takeoffTimer = 0;
+        s.balance = 0;
+        s.stability = 1.0;
         s.targetTimeScale = 0.42;
-        s.velocity.z = Math.max(s.velocity.z, wp.waveSpeed * 0.92);
-        s.velocity.x += wp.breakDir * 2.8;
+        s.velocity.z = Math.max(s.velocity.z, wp.waveSpeed * 0.94);
+        s.velocity.x += wp.breakDir * 3.1;
         s.speed = Math.hypot(s.velocity.x, s.velocity.z);
         s.heading = Math.atan2(s.velocity.x, s.velocity.z);
         s.justSplashed = true;
+        s.justCaughtWave = true;
         s.splashIntensity = 0.65;
-        s.impactEventIntensity = 0.26;
+        s.impactEventIntensity = 0.22;
         this.whitewaterExposure = 0;
         this.triggerCallout('Wave Caught', null);
       }
     } else {
-      s.catchProgress = Math.max(0, s.catchProgress - dt * 0.7);
+      s.catchProgress = Math.max(0, s.catchProgress - dt * 0.45);
       if (onWaveFace && speedKmh < 50 && this.speedGateCalloutCooldown <= 0) {
         this.speedGateCalloutCooldown = 3.0;
         this.triggerCallout('Reach 50 km/h to catch the wave', null);
@@ -966,17 +1027,21 @@ export class SurfPhysicsEngine {
 
     s.position.x += s.velocity.x * dt;
     s.position.z += s.velocity.z * dt;
-    s.position.x = THREE.MathUtils.clamp(s.position.x, -45, 65);
-    if (s.position.z > 9.0) {
-      s.position.z = 9.0;
-      s.velocity.z = Math.min(0, s.velocity.z);
-    }
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -165, 76);
 
     const contact = this.sampleBoardContact(s.position.x, s.position.z, s.heading, wp);
-    const diveDepth = Math.sin(t * Math.PI) * 0.98;
+    const beachY = getBeachHeightAt(s.position.x, s.position.z);
+    const maxSafeDive = Math.max(0, contact.avgY - (beachY + 0.08));
+    const diveDepth = Math.min(Math.sin(t * Math.PI) * 0.98, maxSafeDive);
     s.submersionDepth = diveDepth;
     s.underwaterAmount = THREE.MathUtils.clamp(diveDepth / 0.42, 0, 1);
-    s.position.y = THREE.MathUtils.damp(s.position.y, contact.avgY - diveDepth, 18, dt);
+    s.position.y = THREE.MathUtils.damp(
+      s.position.y,
+      Math.max(beachY + 0.04, contact.avgY - diveDepth),
+      18,
+      dt
+    );
 
     const targetPitch =
       t < 0.45
@@ -1050,105 +1115,115 @@ export class SurfPhysicsEngine {
     const steerInput = input.moveX;
     const trimInput = input.moveY;
 
-    const turnRate = (3.45 - Math.min(0.85, s.speed * 0.032)) * steerInput;
+    const turnRate = (3.55 - Math.min(0.8, s.speed * 0.03)) * steerInput;
     s.heading -= turnRate * dt;
 
     const dirX = Math.sin(s.heading);
     const dirZ = Math.cos(s.heading);
 
-    const gravityPush = 15.2 * sample.slopeSteepness * Math.max(-0.35, dirZ * 0.8 + 0.25);
-    const pumpGain = Math.abs(steerInput) * 1.65 + (sample.section === 'pocket' ? 5.2 : 2.3);
-    const trimBoost = -trimInput * 2.1;
+    // Smooth carving pump & wave-pocket sustain for organic flow down the line
+    const pocketBonus =
+      sample.section === 'pocket' ? 5.8 : sample.section === 'face' ? 3.1 : 1.6;
+    const gravityPush = 15.8 * sample.slopeSteepness * Math.max(-0.3, dirZ * 0.8 + 0.3);
+    const pumpGain = Math.abs(steerInput) * 2.1 + pocketBonus;
+    const trimBoost = -trimInput * 2.15;
 
-    const turnDrag = Math.abs(steerInput) * 0.16;
-    const waterDrag = (0.04 + turnDrag * 0.045) * s.speed * s.speed * 0.135;
-    const whitewaterDrag = sample.section === 'whitewater' ? 3.5 : 0;
+    const turnDrag = Math.abs(steerInput) * 0.14;
+    const waterDrag = (0.036 + turnDrag * 0.04) * s.speed * s.speed * 0.132;
+    const whitewaterDrag = sample.section === 'whitewater' ? 3.2 : 0;
 
     s.speed += (gravityPush + pumpGain + trimBoost - waterDrag - whitewaterDrag) * dt;
-    const minWaveMatch = wp.waveSpeed * (sample.section === 'flat' ? 0.28 : 0.75);
-    s.speed = THREE.MathUtils.clamp(s.speed, Math.max(3.8, minWaveMatch * 0.62), 22.0);
+    const minWaveMatch = wp.waveSpeed * (sample.section === 'flat' ? 0.32 : 0.82);
+    s.speed = THREE.MathUtils.clamp(s.speed, Math.max(4.0, minWaveMatch * 0.65), 22.5);
 
     const targetVx = dirX * s.speed;
-    const targetVz = dirZ * s.speed + (sample.section !== 'flat' ? wp.waveSpeed * 0.28 : 0);
-    const grip = sample.section === 'whitewater' ? 4.8 : 9.2;
+    const targetVz = dirZ * s.speed + (sample.section !== 'flat' ? wp.waveSpeed * 0.26 : 0);
+    const grip = sample.section === 'whitewater' ? 5.2 : 9.8;
     s.velocity.x = THREE.MathUtils.damp(s.velocity.x, targetVx, grip, dt);
     s.velocity.z = THREE.MathUtils.damp(s.velocity.z, targetVz, grip, dt);
 
     s.position.x += s.velocity.x * dt;
     s.position.z += (s.velocity.z - trimInput * 3.6) * dt;
-    s.position.x = THREE.MathUtils.clamp(s.position.x, -70, 95);
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -165, 76);
 
     const contact = this.sampleBoardContact(s.position.x, s.position.z, s.heading, wp);
-    s.position.y = THREE.MathUtils.damp(s.position.y, contact.avgY + 0.025, 22, dt);
+    const rideBeachY = getBeachHeightAt(s.position.x, s.position.z);
+    s.position.y = THREE.MathUtils.damp(
+      s.position.y,
+      Math.max(rideBeachY + 0.03, contact.avgY + 0.025),
+      22,
+      dt
+    );
     s.boardNormal.lerp(contact.blendedNormal, 1 - Math.exp(-16 * dt));
 
-    const targetRoll = THREE.MathUtils.clamp(steerInput * 0.60 + s.balance * 0.26, -0.80, 0.80);
-    s.roll = THREE.MathUtils.damp(s.roll, targetRoll, 11, dt);
-    s.pitch = THREE.MathUtils.damp(s.pitch, dirZ * 0.06, 10, dt);
+    const targetRoll = THREE.MathUtils.clamp(steerInput * 0.62 + s.balance * 0.24, -0.82, 0.82);
+    s.roll = THREE.MathUtils.damp(s.roll, targetRoll, 10.5, dt);
+    s.pitch = THREE.MathUtils.damp(s.pitch, dirZ * 0.06 - trimInput * 0.04, 10, dt);
 
     const nextSample = contact.centerSample;
 
     s.carvingIntensity = THREE.MathUtils.clamp(
-      (Math.abs(steerInput) * 0.78 + nextSample.slopeSteepness * 0.35) * (s.speed / 13.5),
+      (Math.abs(steerInput) * 0.82 + nextSample.slopeSteepness * 0.35) * (s.speed / 13.0),
       0,
       1.25
     );
 
     // Light camera spray pulse on aggressive rail carves
     if (s.carvingIntensity > 0.94 && this.sprayImpactCooldown <= 0) {
-      s.impactEventIntensity = 0.22;
+      s.impactEventIntensity = 0.2;
       this.sprayImpactCooldown = 0.95;
     }
 
     // Balance, speed wobble & breaking-section impact physics
     const isWhitewater = nextSample.section === 'whitewater';
     const turbulence = isWhitewater
-      ? Math.sin(wp.simTime * 11.0) * 0.98 + 0.36 * wp.breakDir
+      ? Math.sin(wp.simTime * 10.5) * 0.85 + 0.32 * wp.breakDir
       : 0;
     const speedWobble =
-      s.speed > 18.2 && Math.abs(steerInput) > 0.72
-        ? Math.sin(wp.simTime * 16.0) * ((s.speed - 18.0) * 0.26)
+      s.speed > 19.0 && Math.abs(steerInput) > 0.78
+        ? Math.sin(wp.simTime * 14.5) * ((s.speed - 18.8) * 0.22)
         : 0;
 
-    const carveTorque = steerInput * (s.speed / 18) * 0.42;
-    const balanceForce = carveTorque + turbulence + speedWobble + input.balanceAdjust * 1.95;
+    const carveTorque = steerInput * (s.speed / 19.5) * 0.36;
+    const balanceForce = carveTorque + turbulence + speedWobble + input.balanceAdjust * 2.05;
     s.balance += balanceForce * dt;
-    const stabilizeDamp = input.balanceStabilize ? 3.2 : 0.92;
+    const stabilizeDamp = input.balanceStabilize ? 3.8 : 1.15;
     s.balance *= Math.exp(-stabilizeDamp * dt);
     s.balance = THREE.MathUtils.clamp(s.balance, -1.25, 1.25);
 
     if (isWhitewater) {
       this.whitewaterExposure += dt;
       if (this.sprayImpactCooldown <= 0) {
-        s.impactEventIntensity = Math.max(s.impactEventIntensity, 0.48);
-        s.impactWhitewater = 0.55;
-        this.sprayImpactCooldown = 0.7;
+        s.impactEventIntensity = Math.max(s.impactEventIntensity, 0.44);
+        s.impactWhitewater = 0.52;
+        this.sprayImpactCooldown = 0.72;
       }
       // Getting caught inside heavy whitewater lip throws the surfer off!
-      if (this.whitewaterExposure > 0.72 && (nextSample.curlHeight > 2.8 || s.speed < wp.waveSpeed * 0.85)) {
+      if (this.whitewaterExposure > 0.88 && (nextSample.curlHeight > 2.8 || s.speed < wp.waveSpeed * 0.82)) {
         this.triggerWipeout('Caught by the Lip', 'lipSlam', 0.92, wp.breakDir);
         return;
       }
     } else {
-      this.whitewaterExposure = Math.max(0, this.whitewaterExposure - dt * 1.4);
+      this.whitewaterExposure = Math.max(0, this.whitewaterExposure - dt * 1.6);
     }
 
-    if (Math.abs(s.balance) > 0.88) {
-      s.stability = Math.max(0, s.stability - dt * 0.75);
+    if (Math.abs(s.balance) > 0.90) {
+      s.stability = Math.max(0, s.stability - dt * 0.68);
     } else {
-      s.stability = Math.min(1, s.stability + dt * 0.48);
+      s.stability = Math.min(1, s.stability + dt * 0.62);
     }
 
     if (s.stability <= 0.05) {
       const fType: FallType =
-        s.speed > 18.2
+        s.speed > 18.8
           ? 'forward'
           : isWhitewater
             ? 'backward'
             : 'sideways';
       const dir = s.balance >= 0 ? 1 : -1;
       this.triggerWipeout(
-        s.speed > 18.2 ? 'Lost Control at Speed' : 'Lost Balance',
+        s.speed > 18.8 ? 'Lost Control at Speed' : 'Lost Balance',
         fType,
         THREE.MathUtils.clamp(0.55 + s.speed / 28, 0.55, 0.95),
         dir
@@ -1200,9 +1275,10 @@ export class SurfPhysicsEngine {
         s.targetTimeScale = 0.22;
         s.slowMoHoldTimer = 0.55;
         s.justSplashed = true;
+        s.justExitedBarrel = true;
         s.splashIntensity = 0.85;
-        s.impactEventIntensity = Math.max(s.impactEventIntensity, 0.52);
-        s.impactWhitewater = 0.45;
+        s.impactEventIntensity = Math.max(s.impactEventIntensity, 0.45);
+        s.impactWhitewater = 0.42;
         this.triggerCallout(`Spit Out · +${pts}`, 'Perfect');
       }
     }
@@ -1287,7 +1363,9 @@ export class SurfPhysicsEngine {
     s.maneuverQuality = quality;
     s.maneuverSpin = 0;
     s.inBarrel = false;
-    this.cooldownTimer = 0.45;
+    s.executedManeuverType = type;
+    s.executedManeuverQuality = quality;
+    this.cooldownTimer = 0.42;
 
     const slowFactor = quality === 'Perfect' ? 0.16 : quality === 'Good' ? 0.24 : 0.34;
     s.targetTimeScale = slowFactor;
@@ -1300,12 +1378,12 @@ export class SurfPhysicsEngine {
       s.verticalVel = launchBoost;
       s.justSplashed = true;
       s.splashIntensity = 0.75;
-      s.impactEventIntensity = 0.22;
+      s.impactEventIntensity = 0.2;
     } else {
       s.phase = 'maneuver';
       s.justSplashed = true;
       s.splashIntensity = quality === 'Perfect' ? 1.0 : 0.72;
-      s.impactEventIntensity = quality === 'Perfect' ? 0.30 : 0.20;
+      s.impactEventIntensity = quality === 'Perfect' ? 0.26 : 0.16;
     }
 
     const basePts =
@@ -1353,12 +1431,13 @@ export class SurfPhysicsEngine {
       return;
     }
 
-    s.balance += (s.balance >= 0 ? 1 : -1) * 0.48;
-    s.stability = Math.max(0.18, s.stability - 0.32);
-    s.speed = Math.max(4.0, s.speed * 0.82);
+    s.balance += (s.balance >= 0 ? 1 : -1) * 0.44;
+    s.stability = Math.max(0.22, s.stability - 0.28);
+    s.speed = Math.max(4.2, s.speed * 0.85);
     s.combo = 1;
-    s.impactEventIntensity = 0.36;
-    this.cooldownTimer = 0.55;
+    s.failedManeuver = true;
+    s.impactEventIntensity = 0.28;
+    this.cooldownTimer = 0.5;
     this.triggerCallout(`Failed ${labelMap[type]} — ${reason}`, 'Failed');
   }
 
@@ -1421,10 +1500,20 @@ export class SurfPhysicsEngine {
     s.velocity.z = dirZ * s.speed + wp.waveSpeed * 0.22;
     s.position.x += s.velocity.x * dt;
     s.position.z += s.velocity.z * dt;
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -165, 76);
 
     const contact = this.sampleBoardContact(s.position.x, s.position.z, s.heading, wp);
+    const manBeachY = getBeachHeightAt(s.position.x, s.position.z);
     if (s.activeManeuver !== 'floater') {
-      s.position.y = THREE.MathUtils.damp(s.position.y, contact.avgY + 0.025, 22, dt);
+      s.position.y = THREE.MathUtils.damp(
+        s.position.y,
+        Math.max(manBeachY + 0.03, contact.avgY + 0.025),
+        22,
+        dt
+      );
+    } else if (s.position.y < manBeachY + 0.05) {
+      s.position.y = manBeachY + 0.05;
     }
     s.boardNormal.lerp(contact.blendedNormal, 1 - Math.exp(-14 * dt));
 
@@ -1467,9 +1556,12 @@ export class SurfPhysicsEngine {
     const dirZ = Math.cos(s.heading);
     s.position.x += dirX * s.speed * 0.92 * dt;
     s.position.z += (dirZ * s.speed * 0.85 + wp.waveSpeed * 0.45) * dt;
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -165, 76);
 
     const waterUnder = sampleSurfWave(s.position.x, s.position.z, wp);
-    s.position.y = waterUnder.height + Math.max(0.025, s.airHeight);
+    const airBeachY = getBeachHeightAt(s.position.x, s.position.z);
+    s.position.y = Math.max(airBeachY + 0.05, waterUnder.height) + Math.max(0.025, s.airHeight);
     s.pitch = THREE.MathUtils.damp(
       s.pitch,
       THREE.MathUtils.clamp(-s.verticalVel * 0.06, -0.45, 0.45),
@@ -1570,12 +1662,11 @@ export class SurfPhysicsEngine {
     s.velocity.multiplyScalar(Math.exp(-2.4 * dt));
     s.position.x += s.velocity.x * dt;
     s.position.z += (s.velocity.z + wp.waveSpeed * 0.25) * dt;
-    s.position.x = THREE.MathUtils.clamp(s.position.x, -45, 65);
-    if (s.position.z > 8.8) {
-      s.position.z = 8.8;
-    }
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -165, 76);
 
     const waterHere = sampleSurfWave(s.position.x, s.position.z, wp);
+    const wipeBeachY = getBeachHeightAt(s.position.x, s.position.z);
 
     let targetSubmersion = 0;
     if (wt < 0.46) {
@@ -1606,9 +1697,10 @@ export class SurfPhysicsEngine {
       }
     }
 
-    s.submersionDepth = THREE.MathUtils.damp(s.submersionDepth, targetSubmersion, 10, dt);
+    const maxSafeSub = Math.max(0, waterHere.height - (wipeBeachY + 0.05));
+    s.submersionDepth = THREE.MathUtils.damp(s.submersionDepth, Math.min(targetSubmersion, maxSafeSub), 10, dt);
     s.underwaterAmount = THREE.MathUtils.clamp(s.submersionDepth / 0.42, 0, 1);
-    s.position.y = waterHere.height + s.airHeight - s.submersionDepth;
+    s.position.y = Math.max(wipeBeachY + 0.04, waterHere.height + s.airHeight - s.submersionDepth);
     s.speed = Math.hypot(s.velocity.x, s.velocity.z);
 
     if (wt >= 2.08) {
@@ -1680,24 +1772,42 @@ export class SurfPhysicsEngine {
     s.velocity.multiplyScalar(Math.exp(-2.4 * dt));
     s.position.x += s.velocity.x * dt;
     s.position.z += s.velocity.z * dt;
-    s.position.x = THREE.MathUtils.clamp(s.position.x, -45, 65);
-    if (s.position.z > 8.8) {
-      s.position.z = 8.8;
+    s.position.x = THREE.MathUtils.clamp(s.position.x, -185, 185);
+    s.position.z = THREE.MathUtils.clamp(s.position.z, -165, 76);
+
+    const recBeachY = getBeachHeightAt(s.position.x, s.position.z);
+    if (sample.height - recBeachY < 0.16) {
+      s.boardDetached = false;
+      s.phase = 'beachWalk';
+      s.position.y = Math.max(recBeachY, sample.height - 0.12);
+      s.balance = 0;
+      s.stability = 1.0;
+      s.boardNormal.set(0, 1, 0);
+      this.triggerCallout('On the beach — explore freely', null);
+      return;
     }
 
-    s.position.y = THREE.MathUtils.damp(s.position.y, sample.height - 0.14, 12, dt);
+    const prevSwimStroke = Math.floor(s.paddleStrokePhase / Math.PI);
+    s.position.y = THREE.MathUtils.damp(
+      s.position.y,
+      Math.max(recBeachY + 0.04, sample.height - 0.14),
+      12,
+      dt
+    );
     s.speed = Math.hypot(s.velocity.x, s.velocity.z);
     s.paddleStrokePhase += dt * (3.0 + s.speed * 0.9);
+    if (s.speed > 0.45 && Math.floor(s.paddleStrokePhase / Math.PI) !== prevSwimStroke) {
+      s.paddleStrokePulse = true;
+    }
     s.boardNormal.set(0, 1, 0);
     s.roll = THREE.MathUtils.damp(s.roll, 0, 8, dt);
     s.pitch = THREE.MathUtils.damp(s.pitch, 0, 8, dt);
 
     const distToBoard = Math.hypot(s.boardPos.x - s.position.x, s.boardPos.z - s.position.z);
     if (distToBoard < 1.65 || s.recoverTimer > 3.6) {
-      // Reclaim board smoothly and resume paddling in the lineup!
+      // Reclaim board smoothly and resume paddling!
       s.boardDetached = false;
       s.phase = 'paddling';
-      s.heading = Math.PI;
       s.balance = 0;
       s.stability = 1.0;
       s.justSplashed = true;

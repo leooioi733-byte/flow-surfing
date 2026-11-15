@@ -179,6 +179,12 @@ export function createBarrelCurlSystem(foamNoise: THREE.Texture): BarrelCurlSyst
     const startRel = -22;
     const endRel = 20;
 
+    // Precompute v^1.62 once per frame (17 entries instead of 73 * 17 Math.pow calls)
+    const vPow = new Float32Array(segArc + 1);
+    for (let j = 0; j <= segArc; j++) {
+      vPow[j] = Math.pow(j / segArc, 1.62);
+    }
+
     for (let i = 0; i <= segAlong; i++) {
       const u = i / segAlong;
       const relBreak = startRel + (endRel - startRel) * u;
@@ -203,22 +209,18 @@ export function createBarrelCurlSystem(foamNoise: THREE.Texture): BarrelCurlSyst
       const bigTubeScale = localH >= 3.0 ? 1.18 : 1.0;
       const archRadiusZ = (1.25 + localH * 0.82 * bigTubeScale) * (0.28 + 0.72 * curlStrength);
       const dropY = localH * (0.22 + 0.72 * curlStrength);
+      const thetaStep = (Math.PI * (0.68 + 0.46 * curlStrength)) / segArc;
+      const archLiftAmp = localH * 0.22 * curlStrength * bigTubeScale;
+      const crestBaseY = swellBase + localH * 1.02;
 
       for (let j = 0; j <= segArc; j++) {
-        const v = j / segArc; // 0 = crest attachment, 1 = plunging lip tip
-        // Parametric cycloid/arch lifting slightly, then curling forward (+Z) and downward (-Y)
-        const theta = v * Math.PI * (0.68 + 0.46 * curlStrength);
+        const theta = j * thetaStep;
         const cz = params.waveCenterZ + Math.sin(theta * 0.72) * archRadiusZ * 1.48;
-        const cy =
-          swellBase +
-          localH * 1.02 +
-          Math.sin(theta) * (localH * 0.22 * curlStrength * bigTubeScale) -
-          Math.pow(v, 1.62) * dropY;
+        const cy = crestBaseY + Math.sin(theta) * archLiftAmp - vPow[j] * dropY;
 
         const idx = i * (segArc + 1) + j;
         posAttr.setXYZ(idx, wx, cy, cz);
 
-        // Radial outward normal along the arch
         const ny = Math.cos(theta * 0.75);
         const nz = Math.sin(theta * 0.75);
         normAttr.setXYZ(idx, 0, ny, nz);

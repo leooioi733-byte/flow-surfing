@@ -89,9 +89,9 @@ export const CareerCreateScreen: React.FC<CareerCreateScreenProps> = ({
   };
 
   return (
-    <div className="pointer-events-auto mx-auto flex max-h-[calc(100vh-5.2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#071726]/88 shadow-2xl">
+    <div className="pointer-events-auto mx-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-6xl flex-col overflow-y-auto rounded-2xl border border-white/15 bg-[#071726]/90 shadow-2xl sm:max-h-[calc(100dvh-1.75rem)] lg:max-h-[calc(100dvh-3rem)] lg:overflow-hidden [@media(max-height:600px)]:!overflow-y-auto">
       {/* Banner Header with Coastal Photography */}
-      <div className="relative flex shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-7">
+      <div className="relative flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-6 sm:py-4 lg:shrink-0 [@media(max-height:600px)]:!shrink">
         <img
           src={CAREER_PHOTOS.beach}
           alt="Praia de campeonato FLOW"
@@ -100,23 +100,23 @@ export const CareerCreateScreen: React.FC<CareerCreateScreenProps> = ({
         />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#071726] via-[#071726]/85 to-[#071726]/70" />
 
-        <div className="relative z-10 flex items-center gap-3.5">
+        <div className="relative z-10 flex min-w-0 items-center gap-3">
           <SurferAvatar
             name={name || 'Surfista'}
             suitColor={suitColor}
             accentColor={accentColor}
             skinTone={skinTone}
             hairColor={hairColor}
-            size="lg"
+            size="md"
           />
-          <div>
-            <div className="text-xs font-medium tracking-[0.14em] text-[#38d9c8]">
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium tracking-[0.14em] text-[#38d9c8] sm:text-xs">
               Nova Carreira Profissional
             </div>
-            <h2 className="font-display text-xl font-bold tracking-tight text-white sm:text-2xl">
+            <h2 className="font-display truncate text-lg font-bold tracking-tight text-white sm:text-2xl">
               {name.trim() || 'Crie seu Surfista'}
             </h2>
-            <p className="text-xs text-[#E7DCC8]/80">
+            <p className="truncate text-xs text-[#E7DCC8]/80">
               {nationality} · {stance} · Circuito Amador — Temporada 1
             </p>
           </div>
@@ -125,7 +125,7 @@ export const CareerCreateScreen: React.FC<CareerCreateScreenProps> = ({
         <button
           type="button"
           onClick={onCancel}
-          className="relative z-10 inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#071726]/75 px-3.5 py-2 text-xs font-medium text-white/85 transition-colors hover:border-white/30 hover:text-white"
+          className="relative z-10 inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 bg-[#071726]/75 px-3 py-1.5 text-xs font-medium text-white/85 transition-colors hover:border-white/30 hover:text-white sm:px-3.5 sm:py-2"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           <span>{hasExistingCareer ? 'Voltar à Carreira' : 'Menu Inicial'}</span>
@@ -133,10 +133,13 @@ export const CareerCreateScreen: React.FC<CareerCreateScreenProps> = ({
       </div>
 
       {/* Form Content */}
-      <form onSubmit={handleSubmit} className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+      <form
+        onSubmit={handleSubmit}
+        className="min-h-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto [@media(max-height:600px)]:!overflow-visible"
+      >
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-12 md:gap-6">
           {/* Column 1: Identity & Character Base */}
-          <div className="space-y-5 lg:col-span-6">
+          <div className="space-y-5 md:col-span-6">
             <div>
               <h3 className="font-display text-sm font-semibold tracking-wide text-white">
                 01. Identidade do Atleta
@@ -269,7 +272,7 @@ export const CareerCreateScreen: React.FC<CareerCreateScreenProps> = ({
           </div>
 
           {/* Column 2: Appearance Customization & Equipment */}
-          <div className="space-y-5 lg:col-span-6">
+          <div className="space-y-5 md:col-span-6">
             <div>
               <h3 className="font-display text-sm font-semibold tracking-wide text-white">
                 04. Personalização de Aparência

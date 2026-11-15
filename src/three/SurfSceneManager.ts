@@ -100,6 +100,7 @@ const SurfCameraFXShader = {
     uDroplets: { value: 0.0 },
     uWhitewater: { value: 0.0 },
     uUnderwater: { value: 0.0 },
+    uSlowMoGray: { value: 0.0 },
     uVelocityDir: { value: new THREE.Vector2(0.0, 0.0) },
   },
   vertexShader: /* glsl */ `
@@ -118,6 +119,7 @@ const SurfCameraFXShader = {
     uniform float uDroplets;
     uniform float uWhitewater;
     uniform float uUnderwater;
+    uniform float uSlowMoGray;
     uniform vec2 uVelocityDir;
     varying vec2 vUv;
 
@@ -215,6 +217,13 @@ const SurfCameraFXShader = {
         vec3 deepWaterColor = vec3(0.04, 0.31, 0.41) + vec3(0.05, 0.12, 0.14) * caustic;
         float vig = smoothstep(0.15, 0.88, length(vUv - 0.5));
         base.rgb = mix(base.rgb, deepWaterColor, uUnderwater * (0.42 + vig * 0.28));
+      }
+
+      // 7. Partial slate-gray cinematic desaturation during maneuver slow-motion (never 100% B&W)
+      if (uSlowMoGray > 0.005) {
+        float luma = dot(base.rgb, vec3(0.299, 0.587, 0.114));
+        vec3 slateGray = vec3(luma) * vec3(0.96, 0.98, 1.03);
+        base.rgb = mix(base.rgb, slateGray, clamp(uSlowMoGray * 0.60, 0.0, 0.64));
       }
 
       gl_FragColor = base;
@@ -341,8 +350,12 @@ export class SurfSceneManager {
   private lensDroplets = 0;
   private whitewaterWash = 0;
   private underwaterBlend = 0;
+  private slowMoGray = 0;
   private shakeTrauma = 0;
   private camBankRoll = 0;
+  private lastPausedEmitted = false;
+  private cachedCompletedWavesRef: SurfHUDState['completedWaves'] = [];
+  private cachedCompletedWavesLen = -1;
 
   // Versatile free-look & orbit camera controls (drag gestures in 1P and 3P)
   private camLookYaw = 0;
@@ -897,7 +910,9 @@ export class SurfSceneManager {
     this.lensDroplets = 0;
     this.whitewaterWash = 0;
     this.underwaterBlend = 0;
+    this.slowMoGray = 0;
     this.shakeTrauma = 0;
+    this.cachedCompletedWavesLen = -1;
     this.tpFollowHeading = Math.PI;
     this.camLookYaw = 0;
     this.camLookPitch = 0;
@@ -1095,7 +1110,9 @@ export class SurfSceneManager {
       this.lensDroplets = 0;
       this.whitewaterWash = 0;
       this.underwaterBlend = 0;
+      this.slowMoGray = 0;
       this.shakeTrauma = 0;
+      this.cachedCompletedWavesLen = -1;
       this.tpFollowHeading = Math.PI;
       this.camLookYaw = 0;
       this.camLookPitch = 0;
@@ -1127,13 +1144,14 @@ export class SurfSceneManager {
       this.lensDroplets = 0;
       this.whitewaterWash = 0;
       this.underwaterBlend = 0;
+      this.slowMoGray = 0;
       this.shakeTrauma = 0;
       this.mouseLookYawTarget = 0;
       this.mouseLookPitchTarget = 0;
       this.dragPointerId = null;
       this.activePointers.clear();
       this.camera.rotation.z = 0;
-      oceanAudio.updateSurfTelemetry(0, 0, false, 0, false);
+      oceanAudio.updateSurfTelemetry(0, 0, false, 0, false, this.weatherRain, 0);
     }
   }
 
@@ -1216,32 +1234,35 @@ export class SurfSceneManager {
 
     if (this.screen === 'surfing') {
       const sp = this.physics.state.position;
+      // Snap shadow target to 0.5m texel grid to prevent shadow edge shimmering/stutter
+      const snapX = Math.round(sp.x * 2) * 0.5;
+      const snapZ = Math.round(sp.z * 2) * 0.5;
       this.sunLight.position.set(
-        sp.x + _sunDir.x * 75,
+        snapX + _sunDir.x * 75,
         _sunDir.y * 75,
-        sp.z + _sunDir.z * 75
+        snapZ + _sunDir.z * 75
       );
-      this.sunLight.target.position.set(sp.x, 0, sp.z);
+      this.sunLight.target.position.set(snapX, 0, snapZ);
     } else {
       this.sunLight.position.copy(_sunDir).multiplyScalar(75);
       this.sunLight.target.position.set(-15, 0, 5);
     }
 
     // Dynamic weather lighting & visibility modulation (zero allocations)
-    this.sunLight.intensity = 2.4 * (1 - overcast * 0.58) * (1 - rain * 0.42);
+    this.sunLight.intensity = 2.45 * (1 - overcast * 0.58) * (1 - rain * 0.42);
     this.sunLight.color
       .copy(_sunWarmColor)
       .lerp(_sunOvercastColor, overcast)
       .lerp(_sunRainColor, rain);
 
-    this.hemiLight.intensity = 0.85 + overcast * 0.08 - rain * 0.16;
+    this.hemiLight.intensity = 0.88 + overcast * 0.08 - rain * 0.16;
     this.hemiLight.color.copy(_hemiSkySunny).lerp(_hemiSkyStorm, Math.max(overcast * 0.7, rain));
     this.hemiLight.groundColor.copy(_hemiGroundSunny).lerp(_hemiGroundStorm, Math.max(overcast * 0.75, rain));
 
-    this.rimLight.intensity = 0.45 * (1 - overcast * 0.45 - rain * 0.3);
+    this.rimLight.intensity = 0.48 * (1 - overcast * 0.45 - rain * 0.3);
     this.rimLight.color.copy(_rimSunny).lerp(_rimStorm, Math.max(overcast * 0.65, rain));
 
-    this.renderer.toneMappingExposure = 1.05 - overcast * 0.08 - rain * 0.1;
+    this.renderer.toneMappingExposure = 1.07 - overcast * 0.08 - rain * 0.1;
 
     const warmth = THREE.MathUtils.clamp((20 - env.sunElevation) / 10, 0, 1) * (1 - overcast * 0.75);
     _targetHorizonColor.set('#d8d4cc').lerp(_warmHorizonColor, warmth);
@@ -1301,9 +1322,16 @@ export class SurfSceneManager {
 
   private updateSurfingGameplay(rawDt: number) {
     if (this.paused) {
-      oceanAudio.updateSurfTelemetry(0, 0, false, 0, false);
-      this.emitHudState(false);
+      oceanAudio.updateSurfTelemetry(0, 0, false, 0, false, this.weatherRain, 0);
+      if (!this.lastPausedEmitted) {
+        this.lastPausedEmitted = true;
+        this.emitHudState(true);
+      }
       return;
+    }
+    if (this.lastPausedEmitted) {
+      this.lastPausedEmitted = false;
+      this.emitHudState(true);
     }
 
     const s = this.physics.state;
@@ -1327,15 +1355,53 @@ export class SurfSceneManager {
     const simDt = Math.min(rawDt, 0.05) * s.timeScale;
     this.replayBuffer.record(rawDt, this.elapsedTime, s, wp);
 
-    // Audio feedback: dynamic water rush, underwater muffle, collision bursts, resurfacing & rain
+    // Partial slate-gray camera factor specifically during maneuver/air slow-motion (or barrel spit-out pulse)
+    const isManeuverSlowMo =
+      s.phase === 'maneuver' ||
+      s.phase === 'airborne' ||
+      (s.slowMoHoldTimer > 0 && s.phase !== 'wipeout');
+    const targetSlowMoGray = isManeuverSlowMo
+      ? THREE.MathUtils.clamp((0.42 - s.timeScale) / 0.24, 0.65, 1.0)
+      : 0.0;
+    const prevSlowMoGray = this.slowMoGray;
+    this.slowMoGray = THREE.MathUtils.damp(
+      this.slowMoGray,
+      targetSlowMoGray,
+      targetSlowMoGray > this.slowMoGray ? 11.0 : 5.5,
+      rawDt
+    );
+
+    // Audio feedback: dynamic water rush, underwater muffle, slow-mo warmth & rich gameplay SFX
     oceanAudio.updateSurfTelemetry(
       s.speed,
       s.carvingIntensity,
       s.inBarrel,
       s.underwaterAmount,
       s.phase !== 'beachWalk',
-      this.weatherRain
+      this.weatherRain,
+      this.slowMoGray
     );
+    if (s.justCaughtWave) {
+      oceanAudio.playTakeoffSound();
+    }
+    if (s.justDuckDived) {
+      oceanAudio.playDuckDiveSound();
+    }
+    if (s.executedManeuverType && s.executedManeuverQuality) {
+      oceanAudio.playManeuverSound(s.executedManeuverType, s.executedManeuverQuality);
+    }
+    if (s.failedManeuver) {
+      oceanAudio.playManeuverFailSound();
+    }
+    if (s.justExitedBarrel) {
+      oceanAudio.playBarrelSpitSound();
+    }
+    if (s.paddleStrokePulse) {
+      oceanAudio.playPaddleStrokeSound(s.phase === 'recovering');
+    }
+    if (s.footstepPulse) {
+      oceanAudio.playFootstepSound();
+    }
     if (s.impactEventIntensity > 0.08) {
       const eff = s.impactEventIntensity * this.cameraImpactIntensity;
       if (this.cameraBlurEnabled) {
@@ -1390,8 +1456,12 @@ export class SurfSceneManager {
     this.surferRig.animate(s, wp.simTime, Math.max(0.001, simDt));
     this.waterParticles.update(simDt, s);
 
+    const slowMoThresholdCrossed =
+      (prevSlowMoGray <= 0.1 && this.slowMoGray > 0.1) ||
+      (prevSlowMoGray > 0.1 && this.slowMoGray <= 0.1);
+
     this.hudEmitAccum += rawDt;
-    if (this.hudEmitAccum >= 0.075 || s.calloutId !== this.lastCalloutId) {
+    if (this.hudEmitAccum >= 0.075 || s.calloutId !== this.lastCalloutId || slowMoThresholdCrossed) {
       this.hudEmitAccum = 0;
       this.lastCalloutId = s.calloutId;
       this.emitHudState(false, sample.section);
@@ -1401,6 +1471,13 @@ export class SurfSceneManager {
   private emitHudState(force: boolean, sectionOverride?: SurfHUDState['waveSection']) {
     if (!this.onHudUpdate) return;
     const s = this.replayActive ? this.replayState : this.physics.state;
+    if (s.completedWaves.length !== this.cachedCompletedWavesLen) {
+      this.cachedCompletedWavesLen = s.completedWaves.length;
+      this.cachedCompletedWavesRef = s.completedWaves.slice();
+    }
+    const postFxActive = Boolean(
+      !this.isSoftwareGl && this.composer && this.graphics.postProcessingEnabled
+    );
     this.onHudUpdate({
       phase: s.phase,
       score: s.score,
@@ -1421,7 +1498,7 @@ export class SurfSceneManager {
       currentWaveManeuvers: s.currentWaveManeuvers,
       currentWaveBestManeuver: s.currentWaveBestManeuver,
       currentWaveBarrelTime: s.currentWaveBarrelTime,
-      completedWaves: s.completedWaves,
+      completedWaves: this.cachedCompletedWavesRef,
       availability: this.replayActive
         ? { bottomTurn: false, cutback: false, floater: false, air: false, duckDive: false }
         : this.physics.getManeuverAvailability(),
@@ -1435,6 +1512,8 @@ export class SurfSceneManager {
       weather: this.weatherCondition,
       weatherMode: this.weatherMode,
       rainIntensity: this.weatherRain,
+      maneuverSlowMo: this.slowMoGray,
+      postFxActive,
       replay: {
         active: this.replayActive,
         playing: this.replayPlaying,
@@ -1537,6 +1616,7 @@ export class SurfSceneManager {
     this.lensDroplets = THREE.MathUtils.damp(this.lensDroplets, 0, 4, rawDt);
     this.whitewaterWash = THREE.MathUtils.damp(this.whitewaterWash, 0, 6, rawDt);
     this.underwaterBlend = THREE.MathUtils.damp(this.underwaterBlend, 0, 6, rawDt);
+    this.slowMoGray = THREE.MathUtils.damp(this.slowMoGray, 0, 7, rawDt);
     this.syncPostFxUniforms();
   }
 
@@ -1809,6 +1889,7 @@ export class SurfSceneManager {
     u.uDroplets.value = this.lensDroplets;
     u.uWhitewater.value = this.whitewaterWash;
     u.uUnderwater.value = this.underwaterBlend;
+    u.uSlowMoGray.value = this.slowMoGray;
   }
 
   private afterDraw(cb: () => void) {
@@ -2039,6 +2120,9 @@ export class SurfSceneManager {
     );
     this.whitewaterWash = THREE.MathUtils.damp(this.whitewaterWash, 0, 6, rawDt);
     this.underwaterBlend = THREE.MathUtils.damp(this.underwaterBlend, s.underwaterAmount, 9, rawDt);
+    const replayManeuverSlowMo =
+      s.phase === 'maneuver' || s.phase === 'airborne' ? 0.9 : 0.0;
+    this.slowMoGray = THREE.MathUtils.damp(this.slowMoGray, replayManeuverSlowMo, 9, rawDt);
     this.syncPostFxUniforms();
   }
 

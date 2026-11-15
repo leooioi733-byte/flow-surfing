@@ -578,6 +578,7 @@ export function createMarineLifeSystem(): MarineLifeSystem {
 
   let enabled = true;
   let kelpAccum = 0.04;
+  let fishAccum = 0.04;
 
   return {
     group,
@@ -588,9 +589,9 @@ export function createMarineLifeSystem(): MarineLifeSystem {
     update: (time, dt, surferPos, waveParams) => {
       if (!enabled) return;
 
-      // 1. Kelp & seagrass gentle surge sway (throttled to ~30Hz to cut per-frame matrix uploads)
+      // 1. Kelp & seagrass gentle surge sway (throttled to ~28Hz to cut per-frame matrix uploads)
       kelpAccum += dt;
-      if (kelpAccum >= 0.033) {
+      if (kelpAccum >= 0.036) {
         kelpAccum = 0;
         for (let i = 0; i < kelpBlades.length; i++) {
           const k = kelpBlades[i];
@@ -605,48 +606,53 @@ export function createMarineLifeSystem(): MarineLifeSystem {
         kelpInst.instanceMatrix.needsUpdate = true;
       }
 
-      // 2. Fish schools orbiting reef & scattering gently away from nearby surfer
-      for (let i = 0; i < fishAgents.length; i++) {
-        const f = fishAgents[i];
-        const ang = time * f.speed + f.phase;
-        let fx = f.schoolCenterX + Math.cos(ang) * f.radiusX;
-        let fz = f.schoolCenterZ + Math.sin(ang) * f.radiusZ;
+      // 2. Fish schools orbiting reef & scattering gently away from nearby surfer (throttled ~33Hz)
+      fishAccum += dt;
+      if (fishAccum >= 0.03) {
+        const fishDt = fishAccum;
+        fishAccum = 0;
+        for (let i = 0; i < fishAgents.length; i++) {
+          const f = fishAgents[i];
+          const ang = time * f.speed + f.phase;
+          let fx = f.schoolCenterX + Math.cos(ang) * f.radiusX;
+          let fz = f.schoolCenterZ + Math.sin(ang) * f.radiusZ;
 
-        if (surferPos) {
-          const dx = fx - surferPos.x;
-          const dz = fz - surferPos.z;
-          const distSq = dx * dx + dz * dz;
-          if (distSq < 36 && distSq > 0.01) {
-            const d = Math.sqrt(distSq);
-            const push = (6 - d) * 0.65;
-            f.scatterX = THREE.MathUtils.damp(f.scatterX, (dx / d) * push, 6, dt);
-            f.scatterZ = THREE.MathUtils.damp(f.scatterZ, (dz / d) * push, 6, dt);
-          } else if (Math.abs(f.scatterX) > 0.002 || Math.abs(f.scatterZ) > 0.002) {
-            f.scatterX = THREE.MathUtils.damp(f.scatterX, 0, 2.2, dt);
-            f.scatterZ = THREE.MathUtils.damp(f.scatterZ, 0, 2.2, dt);
+          if (surferPos) {
+            const dx = fx - surferPos.x;
+            const dz = fz - surferPos.z;
+            const distSq = dx * dx + dz * dz;
+            if (distSq < 36 && distSq > 0.01) {
+              const d = Math.sqrt(distSq);
+              const push = (6 - d) * 0.65;
+              f.scatterX = THREE.MathUtils.damp(f.scatterX, (dx / d) * push, 6, fishDt);
+              f.scatterZ = THREE.MathUtils.damp(f.scatterZ, (dz / d) * push, 6, fishDt);
+            } else if (Math.abs(f.scatterX) > 0.002 || Math.abs(f.scatterZ) > 0.002) {
+              f.scatterX = THREE.MathUtils.damp(f.scatterX, 0, 2.2, fishDt);
+              f.scatterZ = THREE.MathUtils.damp(f.scatterZ, 0, 2.2, fishDt);
+            }
           }
+          fx += f.scatterX;
+          fz += f.scatterZ;
+
+          const seabedY = getBeachHeightAt(fx, fz);
+          const nearWave = waveParams !== null && Math.abs(fz - waveParams.waveCenterZ) < 22;
+          const waterY = nearWave ? sampleSurfWave(fx, fz, waveParams).height : 0.15;
+          const desiredY = seabedY + f.baseDepthOffset + Math.sin(time * 2.8 + f.phase) * f.bobAmp;
+          const fy = THREE.MathUtils.clamp(desiredY, seabedY + 0.22, waterY - 0.26);
+
+          // Tangent heading along ellipse + subtle tail wag
+          const vx = -Math.sin(ang) * f.radiusX * f.speed;
+          const vz = Math.cos(ang) * f.radiusZ * f.speed;
+          const yaw = Math.atan2(vx, vz) + Math.sin(time * 9.5 + f.phase) * 0.12;
+
+          _dummy.position.set(fx, fy, fz);
+          _dummy.rotation.set(0, yaw, 0);
+          _dummy.scale.setScalar(f.scale);
+          _dummy.updateMatrix();
+          fishInst.setMatrixAt(i, _dummy.matrix);
         }
-        fx += f.scatterX;
-        fz += f.scatterZ;
-
-        const seabedY = getBeachHeightAt(fx, fz);
-        const nearWave = waveParams !== null && Math.abs(fz - waveParams.waveCenterZ) < 22;
-        const waterY = nearWave ? sampleSurfWave(fx, fz, waveParams).height : 0.15;
-        const desiredY = seabedY + f.baseDepthOffset + Math.sin(time * 2.8 + f.phase) * f.bobAmp;
-        const fy = THREE.MathUtils.clamp(desiredY, seabedY + 0.22, waterY - 0.26);
-
-        // Tangent heading along ellipse + subtle tail wag
-        const vx = -Math.sin(ang) * f.radiusX * f.speed;
-        const vz = Math.cos(ang) * f.radiusZ * f.speed;
-        const yaw = Math.atan2(vx, vz) + Math.sin(time * 9.5 + f.phase) * 0.12;
-
-        _dummy.position.set(fx, fy, fz);
-        _dummy.rotation.set(0, yaw, 0);
-        _dummy.scale.setScalar(f.scale);
-        _dummy.updateMatrix();
-        fishInst.setMatrixAt(i, _dummy.matrix);
+        fishInst.instanceMatrix.needsUpdate = true;
       }
-      fishInst.instanceMatrix.needsUpdate = true;
 
       // 3. Sea turtles swimming cleanly below surface
       for (let i = 0; i < turtles.length; i++) {

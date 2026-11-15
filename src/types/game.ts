@@ -204,5 +204,7 @@ export interface SurfHUDState {
   weather: WeatherCondition;
   weatherMode: WeatherMode;
   rainIntensity: number;
+  maneuverSlowMo: number; // 0..1 smooth maneuver slow-motion factor
+  postFxActive: boolean; // true when WebGL ShaderPass renders camera FX directly
   replay: ReplayHUDState;
 }

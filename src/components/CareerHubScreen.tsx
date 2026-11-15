@@ -131,9 +131,9 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
   }
 
   return (
-    <div className="pointer-events-auto mx-auto flex max-h-[calc(100vh-5.2rem)] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#071726]/88 shadow-2xl">
+    <div className="pointer-events-auto mx-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-7xl flex-col overflow-y-auto rounded-2xl border border-white/15 bg-[#071726]/90 shadow-2xl sm:max-h-[calc(100dvh-1.75rem)] lg:max-h-[calc(100dvh-3rem)] lg:overflow-hidden [@media(max-height:600px)]:!overflow-y-auto">
       {/* MAIN ATHLETE HEADER */}
-      <div className="relative shrink-0 border-b border-white/10 px-4 py-4 sm:px-6">
+      <div className="relative border-b border-white/10 px-3.5 py-3 sm:px-5 sm:py-3.5 lg:shrink-0 lg:px-6 lg:py-4 [@media(max-height:600px)]:!shrink">
         <img
           src={CAREER_PHOTOS.reef}
           alt="Circuito Profissional FLOW"
@@ -142,34 +142,45 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
         />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#071726] via-[#071726]/90 to-[#071726]/75" />
 
-        <div className="relative z-10 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3.5">
-            <SurferAvatar
-              name={career.surfer.name}
-              suitColor={career.surfer.suitColor}
-              accentColor={career.surfer.accentColor}
-              skinTone={career.surfer.skinTone}
-              hairColor={career.surfer.hairColor}
-              size="lg"
-            />
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-medium tracking-[0.12em] text-[#38d9c8]">
-                <span>{tierInfo.name}</span>
-                <span aria-hidden="true" className="text-white/30">·</span>
-                <span className="text-[#E7DCC8]/85">Temporada {career.season}</span>
-              </div>
-              <h2 className="font-display truncate text-xl font-bold text-white sm:text-2xl">
-                {career.surfer.name}
-              </h2>
-              <div className="text-xs text-white/65">
-                {career.surfer.nationality} ({career.surfer.nationalityCode}) · {career.surfer.stance} · Rep.{' '}
-                <span className="font-mono-tabular text-white/90">{career.reputation}</span>
+        <div className="relative z-10 flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between lg:gap-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <SurferAvatar
+                name={career.surfer.name}
+                suitColor={career.surfer.suitColor}
+                accentColor={career.surfer.accentColor}
+                skinTone={career.surfer.skinTone}
+                hairColor={career.surfer.hairColor}
+                size="md"
+              />
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-medium tracking-[0.12em] text-[#38d9c8] sm:text-xs">
+                  <span>{tierInfo.name}</span>
+                  <span aria-hidden="true" className="text-white/30">·</span>
+                  <span className="text-[#E7DCC8]/85">Temporada {career.season}</span>
+                </div>
+                <h2 className="font-display truncate text-lg font-bold text-white sm:text-xl lg:text-2xl">
+                  {career.surfer.name}
+                </h2>
+                <div className="truncate text-[11px] text-white/65 sm:text-xs">
+                  {career.surfer.nationality} ({career.surfer.nationalityCode}) · {career.surfer.stance} · Rep.{' '}
+                  <span className="font-mono-tabular text-white/90">{career.reputation}</span>
+                </div>
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={onBackHome}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 bg-[#0B2338]/80 px-2.5 py-1.5 text-xs font-medium text-white/85 transition-colors hover:border-white/30 hover:text-white sm:hidden"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Menu</span>
+            </button>
           </div>
 
           {/* Key Career KPIs */}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:flex lg:items-center lg:gap-3">
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 sm:gap-2 lg:flex lg:items-center lg:gap-2.5">
             <HeaderKPI label="Ranking" value={`#${playerRank}`} highlight />
             <HeaderKPI
               label="Premiações"
@@ -187,9 +198,9 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
           </div>
         </div>
 
-        {/* Navigation Tabs & Back Button */}
-        <div className="relative z-10 mt-4 flex flex-wrap items-center justify-between gap-2.5 border-t border-white/10 pt-3">
-          <div className="flex flex-wrap items-center gap-1 rounded-xl bg-white/[0.04] p-1">
+        {/* Navigation Tabs & Back Button (Single-line scrollable tabs on mobile/landscape) */}
+        <div className="relative z-10 mt-2.5 flex items-center justify-between gap-2.5 border-t border-white/10 pt-2.5 sm:mt-3 sm:pt-3">
+          <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl bg-white/[0.04] p-1">
             {(
               [
                 { id: 'resumo', label: 'Painel', icon: Trophy },
@@ -214,7 +225,7 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
                   key={item.id}
                   type="button"
                   onClick={() => setTab(item.id)}
-                  className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3 ${
                     active
                       ? 'bg-[#2596A6] text-white'
                       : 'text-white/70 hover:bg-white/[0.06] hover:text-white'
@@ -230,7 +241,7 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
           <button
             type="button"
             onClick={onBackHome}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#0B2338]/75 px-3 py-1.5 text-xs font-medium text-white/80 transition-colors hover:border-white/30 hover:text-white"
+            className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/15 bg-[#0B2338]/75 px-3 py-1.5 text-xs font-medium text-white/80 transition-colors hover:border-white/30 hover:text-white sm:inline-flex"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>Menu Principal</span>
@@ -239,7 +250,7 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
       </div>
 
       {/* BODY CONTENT */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className="min-h-0 flex-1 p-3.5 sm:p-5 lg:overflow-y-auto lg:p-6 [@media(max-height:600px)]:!overflow-visible">
         {/* RIVALRY / HEAD-TO-HEAD SPOTLIGHT NOTIFICATION */}
         {unseenRivalryNotif && (
           <div className="mb-5 rounded-xl border border-[#e68a5c]/50 bg-[#0B2338]/95 p-4 sm:p-5">
@@ -338,19 +349,19 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
                 />
                 <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#071726]/95 via-[#071726]/78 to-[#071726]/45" />
 
-                <div className="relative z-10 flex flex-col justify-between gap-5 p-5 sm:flex-row sm:items-end sm:p-7">
-                  <div className="max-w-xl">
-                    <div className="text-xs font-medium tracking-[0.14em] text-[#38d9c8]">
+                <div className="relative z-10 flex flex-col justify-between gap-4 p-4 sm:flex-row sm:items-center sm:p-5 lg:items-end lg:p-7">
+                  <div className="min-w-0 max-w-xl">
+                    <div className="text-[11px] font-medium tracking-[0.14em] text-[#38d9c8] sm:text-xs">
                       Próximo Campeonato · {nextEvent.deadlineLabel}
                     </div>
-                    <h3 className="font-display mt-1.5 text-2xl font-bold text-white sm:text-3xl">
+                    <h3 className="font-display mt-1 text-xl font-bold text-white sm:text-2xl lg:text-3xl">
                       {nextEvent.name}
                     </h3>
                     <p className="mt-1 text-xs text-[#E7DCC8]/90 sm:text-sm">
                       {nextEvent.location} · Ondas {nextEvent.waveHeightLabel} ·{' '}
                       {nextEvent.swellConditions}
                     </p>
-                    <div className="font-mono-tabular mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/80">
+                    <div className="font-mono-tabular mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/80 sm:mt-3 sm:gap-x-4 sm:text-xs">
                       <span>Premiação: ${nextEvent.prizePool.toLocaleString()}</span>
                       <span aria-hidden="true" className="text-white/30">·</span>
                       <span>1º Lugar: {nextEvent.pointsFirst.toLocaleString()} pts</span>
@@ -366,7 +377,7 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
                     <button
                       type="button"
                       onClick={() => onStartEvent(nextEvent.id)}
-                      className="inline-flex items-center gap-2 rounded-lg bg-[#2596A6] px-6 py-3 text-xs font-semibold tracking-[0.12em] text-white shadow-lg transition-colors hover:bg-[#2eb0c2] sm:text-sm"
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#2596A6] px-5 py-2.5 text-xs font-semibold tracking-[0.12em] text-white shadow-lg transition-colors hover:bg-[#2eb0c2] sm:w-auto sm:px-6 sm:py-3 sm:text-sm"
                     >
                       <span>INICIAR CAMPEONATO</span>
                       <ChevronRight className="h-4 w-4" />
@@ -725,13 +736,13 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1 rounded-xl bg-white/[0.04] p-1">
+              <div className="no-scrollbar flex items-center gap-1 overflow-x-auto rounded-xl bg-white/[0.04] p-1">
                 {CAREER_TIERS.map((t) => (
                   <button
                     key={t.id}
                     type="button"
                     onClick={() => setRankingFilter(t.id)}
-                    className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                    className={`shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
                       rankingFilter === t.id
                         ? 'bg-[#2596A6] text-white'
                         : 'text-white/65 hover:text-white'
@@ -743,7 +754,7 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => setRankingFilter('global')}
-                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                  className={`shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
                     rankingFilter === 'global'
                       ? 'bg-[#2596A6] text-white'
                       : 'text-white/65 hover:text-white'
@@ -976,7 +987,7 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
               </p>
             </div>
 
-            <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
               {SPONSOR_BRANDS.map((brand) => {
                 const contract = career.sponsors.find((c) => c.brandId === brand.id);
                 const rewardBoard = brand.rewardBoardId
@@ -1188,9 +1199,9 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
 
         {/* TAB 6: PROFILE, CUSTOMIZATION & HISTORY */}
         {tab === 'perfil' && (
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-12 lg:gap-6">
             {/* Appearance Live Editor */}
-            <div className="space-y-4 rounded-xl border border-white/12 bg-[#0B2338]/60 p-5 lg:col-span-5">
+            <div className="space-y-4 rounded-xl border border-white/12 bg-[#0B2338]/60 p-4 sm:p-5 md:col-span-5">
               <h3 className="font-display text-base font-bold text-white">
                 Personalizar Aparência &amp; Estilo
               </h3>
@@ -1336,7 +1347,7 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
             </div>
 
             {/* Career History & Past Seasons */}
-            <div className="space-y-4 lg:col-span-7">
+            <div className="space-y-4 md:col-span-7">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <HeaderKPI label="Vitórias" value={`${career.wins}`} />
                 <HeaderKPI label="Pódios" value={`${career.podiums}`} />
@@ -1418,11 +1429,11 @@ function HeaderKPI({
   compact?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-white/12 bg-[#0B2338]/75 px-3 py-2">
+    <div className="rounded-xl border border-white/12 bg-[#0B2338]/75 px-2.5 py-1.5 sm:px-3 sm:py-2">
       <div className="text-[10px] font-medium tracking-wide text-white/55">{label}</div>
       <div
         className={`font-mono-tabular mt-0.5 truncate font-bold ${
-          compact ? 'max-w-[140px] text-xs' : 'text-sm'
+          compact ? 'text-xs lg:max-w-[155px]' : 'text-xs sm:text-sm'
         } ${highlight ? 'text-[#38d9c8]' : 'text-white'}`}
       >
         {value}

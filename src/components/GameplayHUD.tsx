@@ -354,6 +354,14 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
 
     return (
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between p-3 sm:p-5">
+        {/* Partial slate-gray fallback when post-processing is disabled during maneuver slow-mo */}
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-0 backdrop-grayscale-[58%] backdrop-contrast-[1.03] transition-opacity duration-200 ${
+            !hud.postFxActive && hud.maneuverSlowMo > 0.08 ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+
         {/* Underwater tint if viewing underwater portion of wipeout replay */}
         <div
           aria-hidden="true"
@@ -526,6 +534,14 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between p-3 sm:p-5">
+      {/* Partial slate-gray fallback when post-processing is disabled during maneuver slow-mo */}
+      <div
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-0 backdrop-grayscale-[58%] backdrop-contrast-[1.03] transition-opacity duration-200 ${
+          !hud.postFxActive && hud.maneuverSlowMo > 0.08 ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+
       {/* Brief non-blur underwater radial tint fallback during wipeout submersion */}
       <div
         aria-hidden="true"
@@ -754,21 +770,21 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
 
       {/* BOTTOM CORNERS: Left Virtual Joystick, Center Slim Balance Meter, Right Illustrated Maneuver Buttons */}
       <div className="flex items-end justify-between gap-4">
-        {/* LEFT SIDE: Virtual Touch Joystick (pointer-isolated from canvas camera rotation) */}
-        <div
-          onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto flex touch-none flex-col items-start gap-1 p-1"
-        >
+        {/* LEFT SIDE: Virtual Touch Joystick (pointer-isolated only on the stick circle) */}
+        <div className="pointer-events-none flex flex-col items-start gap-1 p-1">
           <div
             ref={joyBaseRef}
-            onPointerDown={handleJoyPointerDown}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              handleJoyPointerDown(e);
+            }}
             onPointerMove={handleJoyPointerMove}
             onPointerUp={handleJoyPointerUp}
             onPointerCancel={handleJoyPointerUp}
             onLostPointerCapture={handleJoyPointerUp}
             role="application"
             aria-label="Directional surfing joystick"
-            className="relative flex h-24 w-24 touch-none select-none items-center justify-center rounded-full border border-white/22 bg-[#071726]/45 sm:h-28 sm:w-28"
+            className="pointer-events-auto relative flex h-24 w-24 touch-none select-none items-center justify-center rounded-full border border-white/22 bg-[#071726]/45 sm:h-28 sm:w-28"
           >
             {/* Subtle crosshairs */}
             <div className="pointer-events-none absolute inset-3.5 rounded-full border border-white/10" />
@@ -781,7 +797,7 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
               }}
             />
           </div>
-          <span className="hidden pl-1 text-[10px] tracking-wide text-white/50 md:inline">
+          <span className="pointer-events-none hidden pl-1 text-[10px] tracking-wide text-white/50 md:inline">
             {hud.phase === 'beachWalk'
               ? 'WASD / Espaço · Caminhar'
               : hud.phase === 'paddling'
@@ -845,19 +861,16 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
           </div>
         )}
 
-        {/* RIGHT SIDE: Tactile Illustrated Circular Maneuver Buttons */}
-        <div
-          onPointerDown={(e) => e.stopPropagation()}
-          className="pointer-events-auto flex touch-none flex-col items-end gap-2"
-        >
+        {/* RIGHT SIDE: Tactile Illustrated Circular Maneuver Buttons (hints pass pointer events through to camera) */}
+        <div className="pointer-events-none flex flex-col items-end gap-2">
           {hud.phase === 'beachWalk' && (
-            <div className="flex items-center gap-1.5 text-xs tracking-wide text-[#E7DCC8]/90">
+            <div className="pointer-events-none flex items-center gap-1.5 text-xs tracking-wide text-[#E7DCC8]/90 select-none">
               <Sparkles className="h-3.5 w-3.5 text-[#2596A6]" />
               <span>Walk with your board to the water</span>
             </div>
           )}
           {hud.phase === 'paddling' && (
-            <div className="flex items-center gap-1.5 text-xs tracking-wide text-[#E7DCC8]/90">
+            <div className="pointer-events-none flex items-center gap-1.5 text-xs tracking-wide text-[#E7DCC8]/90 select-none">
               <Sparkles className="h-3.5 w-3.5 text-[#2596A6]" />
               <span>
                 {hud.speedKmh >= 50
@@ -867,13 +880,13 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = ({
             </div>
           )}
           {hud.phase === 'recovering' && (
-            <div className="flex items-center gap-1.5 text-xs tracking-wide text-[#E7DCC8]/90">
+            <div className="pointer-events-none flex items-center gap-1.5 text-xs tracking-wide text-[#E7DCC8]/90 select-none">
               <Sparkles className="h-3.5 w-3.5 text-[#2596A6]" />
               <span>Swim back to your surfboard</span>
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-x-3 gap-y-2">
+          <div className="pointer-events-none grid grid-cols-3 gap-x-3 gap-y-2">
             <div aria-hidden="true" />
             <ManeuverButton
               label="Bottom"
@@ -1034,22 +1047,23 @@ const ManeuverButton: React.FC<ManeuverButtonProps> = ({
   onTrigger,
 }) => {
   return (
-    <div className="flex flex-col items-center gap-1">
+    <div className="pointer-events-none flex flex-col items-center gap-1">
       <button
         type="button"
         aria-label={ariaLabel}
         title={ariaLabel}
         disabled={disabled}
         onPointerDown={(e) => {
+          e.stopPropagation();
           e.preventDefault();
           if (!disabled) onTrigger();
         }}
         className={`relative flex h-13 w-13 touch-none select-none items-center justify-center rounded-full border-2 shadow-lg transition-all duration-150 active:translate-y-0.5 active:scale-92 sm:h-15 sm:w-15 ${
           disabled
-            ? 'border-white/12 bg-[#071726]/38 text-white/30'
+            ? 'pointer-events-none border-white/12 bg-[#071726]/38 text-white/30'
             : ready
-              ? 'border-[#38d9c8]/85 bg-[#0B3C5D]/88 text-[#38d9c8] shadow-[0_6px_18px_rgba(37,150,166,0.35)] hover:bg-[#135378]'
-              : 'border-white/25 bg-[#071726]/65 text-white/82 hover:border-white/45 hover:bg-[#0B3C5D]/75'
+              ? 'pointer-events-auto border-[#38d9c8]/85 bg-[#0B3C5D]/88 text-[#38d9c8] shadow-[0_6px_18px_rgba(37,150,166,0.35)] hover:bg-[#135378]'
+              : 'pointer-events-auto border-white/25 bg-[#071726]/65 text-white/82 hover:border-white/45 hover:bg-[#0B3C5D]/75'
         }`}
       >
         {/* Inner tactile bevel ring */}

@@ -91,6 +91,8 @@ const INITIAL_HUD: SurfHUDState = {
   weather: 'sunny',
   weatherMode: 'dynamic',
   rainIntensity: 0,
+  maneuverSlowMo: 0,
+  postFxActive: true,
   replay: {
     active: false,
     playing: true,
@@ -200,6 +202,62 @@ export default function App() {
       oceanAudio.dispose();
     };
   }, []);
+
+  // Unlock & start Web Audio seamlessly on first user gesture when audio is enabled
+  useEffect(() => {
+    if (!settings.audioEnabled) return;
+    const unlock = () => {
+      oceanAudio.unlockOnGesture(settings.audioEnabled, settings.audioVolume);
+    };
+    window.addEventListener('pointerdown', unlock, { passive: true, capture: true });
+    window.addEventListener('keydown', unlock, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock, true);
+      window.removeEventListener('keydown', unlock, true);
+    };
+  }, [settings.audioEnabled, settings.audioVolume]);
+
+  // Android / Capacitor & mobile WebView lifecycle: suspend audio and pause gameplay when backgrounded
+  useEffect(() => {
+    const handleBackground = () => {
+      heldKeysRef.current.clear();
+      heldManeuverKeysRef.current.clear();
+      touchJoyRef.current = { x: 0, y: 0 };
+      touchBalanceRef.current = 0;
+      sceneManagerRef.current?.setJoystickActive(false);
+      sceneManagerRef.current?.setSurfInput({
+        moveX: 0,
+        moveY: 0,
+        balanceAdjust: 0,
+        balanceStabilize: false,
+      });
+      oceanAudio.suspendForBackground();
+      if (screen === 'surfing' && !hudRef.current.replay.active) {
+        setPaused(true);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        handleBackground();
+      } else {
+        oceanAudio.resumeFromBackground();
+      }
+    };
+
+    const handlePageShow = () => {
+      oceanAudio.resumeFromBackground();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handleBackground);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handleBackground);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, [screen]);
 
   const activeTournamentEvent = useMemo(() => {
     if (!career?.activeTournament) return null;
@@ -752,7 +810,7 @@ export default function App() {
   const viewportFrameClass = getViewportFrameClass(settings.aspectMode);
 
   return (
-    <main className="relative flex h-screen w-screen items-center justify-center overflow-hidden bg-[#071726]">
+    <main className="relative flex h-[100dvh] w-screen items-center justify-center overflow-hidden bg-[#071726]">
       <div className={viewportFrameClass}>
         {/* Isolated 3D WebGL Viewport */}
         <div
@@ -832,7 +890,7 @@ export default function App() {
             }
           />
         ) : screen === 'careerCreate' ? (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-3 sm:p-6">
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-2 sm:p-3.5 lg:p-6">
             <CareerCreateScreen
               surfers={SURFER_PROFILES}
               boards={SURFBOARDS}
@@ -845,7 +903,7 @@ export default function App() {
             />
           </div>
         ) : screen === 'career' && career ? (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-3 sm:p-6">
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-2 sm:p-3.5 lg:p-6">
             <CareerHubScreen
               career={career}
               boards={SURFBOARDS}

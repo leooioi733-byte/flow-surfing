@@ -465,7 +465,7 @@ export const MenuOverlay: React.FC<MenuOverlayProps> = ({
         {/* BEACH SELECTION EXPERIENCE */}
         {screen === 'beaches' && (
           <div className="pointer-events-auto mx-auto w-full max-w-5xl">
-            <div className="max-h-[calc(100vh-5rem)] overflow-y-auto rounded-xl border border-white/15 bg-[#071726]/76 p-4 sm:p-6">
+            <div className="max-h-[calc(100dvh-4.5rem)] overflow-y-auto rounded-xl border border-white/15 bg-[#071726]/76 p-4 sm:p-6">
               <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between md:gap-5">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 text-xs font-medium tracking-[0.14em] text-[#2596A6]">
@@ -564,7 +564,7 @@ export const MenuOverlay: React.FC<MenuOverlayProps> = ({
 
         {/* SURFERS SELECTION */}
         {screen === 'surfers' && (
-          <div className="pointer-events-auto mx-auto max-h-[calc(100vh-5rem)] w-full max-w-4xl overflow-y-auto rounded-xl border border-white/15 bg-[#071726]/76 p-4 sm:p-6">
+          <div className="pointer-events-auto mx-auto max-h-[calc(100dvh-4.5rem)] w-full max-w-4xl overflow-y-auto rounded-xl border border-white/15 bg-[#071726]/76 p-4 sm:p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
               <div>
                 <div className="text-xs font-medium tracking-[0.14em] text-[#2596A6]">
@@ -619,7 +619,7 @@ export const MenuOverlay: React.FC<MenuOverlayProps> = ({
 
         {/* BOARDS SELECTION (Live 3D Shoreline Showcase) */}
         {screen === 'boards' && (
-          <div className="pointer-events-auto mx-auto max-h-[calc(100vh-5rem)] w-full max-w-5xl overflow-y-auto rounded-xl border border-white/15 bg-[#071726]/76 p-4 sm:p-6">
+          <div className="pointer-events-auto mx-auto max-h-[calc(100dvh-4.5rem)] w-full max-w-5xl overflow-y-auto rounded-xl border border-white/15 bg-[#071726]/76 p-4 sm:p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
               <div>
                 <div className="text-xs font-medium tracking-[0.14em] text-[#2596A6]">
@@ -677,9 +677,9 @@ export const MenuOverlay: React.FC<MenuOverlayProps> = ({
 
         {/* SETTINGS — Multiplatform 3-Tab Panel (Geral & Tela | Gráficos | Controles & Dados) */}
         {screen === 'settings' && (
-          <div className="pointer-events-auto mx-auto flex max-h-[calc(100vh-5.2rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#071726]/86 shadow-2xl">
+          <div className="pointer-events-auto mx-auto flex max-h-[calc(100dvh-4.5rem)] w-full max-w-4xl flex-col overflow-y-auto rounded-2xl border border-white/15 bg-[#071726]/86 shadow-2xl lg:overflow-hidden [@media(max-height:600px)]:!overflow-y-auto">
             {/* Header + Horizontal Tabs */}
-            <div className="flex flex-col gap-3 border-b border-white/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <div className="flex flex-col gap-3 border-b border-white/10 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:shrink-0 [@media(max-height:600px)]:!shrink">
               <div>
                 <h2 className="font-display text-lg font-bold text-white sm:text-xl">
                   Configurações &amp; Multiplataforma
@@ -730,7 +730,7 @@ export const MenuOverlay: React.FC<MenuOverlayProps> = ({
             </div>
 
             {/* Scrollable Body */}
-            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+            <div className="min-h-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto [@media(max-height:600px)]:!overflow-visible">
               {/* TAB 1: GERAL & TELA */}
               {settingsTab === 'geral' && (
                 <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">

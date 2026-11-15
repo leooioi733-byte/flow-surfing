@@ -46,8 +46,8 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
     const isPodium = res.placement <= 3;
 
     return (
-      <div className="pointer-events-auto mx-auto flex max-h-[calc(100vh-5.2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#071726]/92 shadow-2xl">
-        <div className="relative border-b border-white/10 p-5 sm:p-6">
+      <div className="pointer-events-auto mx-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border border-white/15 bg-[#071726]/92 shadow-2xl sm:max-h-[calc(100dvh-1.75rem)] lg:max-h-[calc(100dvh-3rem)] lg:overflow-hidden [@media(max-height:600px)]:!overflow-y-auto">
+        <div className="relative border-b border-white/10 p-4 sm:p-5 lg:shrink-0 [@media(max-height:600px)]:!shrink">
           <img
             src={photoSrc}
             alt={event.name}
@@ -61,7 +61,7 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
               <div className="text-xs font-medium tracking-[0.14em] text-[#38d9c8]">
                 Resultado Oficial · {event.name}
               </div>
-              <h2 className="font-display mt-1 text-2xl font-bold text-white sm:text-3xl">
+              <h2 className="font-display mt-1 text-xl font-bold text-white sm:text-3xl">
                 {isWin
                   ? 'Campeão da Etapa!'
                   : isPodium
@@ -73,16 +73,16 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl border border-white/15 bg-[#0B2338]/85 px-4 py-2.5 text-right">
+            <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+              <div className="rounded-xl border border-white/15 bg-[#0B2338]/85 px-3.5 py-2 text-right sm:px-4 sm:py-2.5">
                 <div className="text-[11px] text-white/60">Pontos no Ranking</div>
-                <div className="font-mono-tabular text-lg font-bold text-[#38d9c8]">
+                <div className="font-mono-tabular text-base font-bold text-[#38d9c8] sm:text-lg">
                   +{res.pointsEarned.toLocaleString()} pts
                 </div>
               </div>
-              <div className="rounded-xl border border-white/15 bg-[#0B2338]/85 px-4 py-2.5 text-right">
+              <div className="rounded-xl border border-white/15 bg-[#0B2338]/85 px-3.5 py-2 text-right sm:px-4 sm:py-2.5">
                 <div className="text-[11px] text-white/60">Premiação Total</div>
-                <div className="font-mono-tabular text-lg font-bold text-[#f4c97a]">
+                <div className="font-mono-tabular text-base font-bold text-[#f4c97a] sm:text-lg">
                   +${res.prizeEarned.toLocaleString()}
                 </div>
               </div>
@@ -90,7 +90,7 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+        <div className="min-h-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto [@media(max-height:600px)]:!overflow-visible">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <MetricBox label="Melhor Somatório" value={`${res.bestHeatTotal.toFixed(1)} / 20`} />
             <MetricBox label="Melhor Onda" value={`${res.bestWave.toFixed(1)} / 10`} />
@@ -151,7 +151,7 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-white/10 px-5 py-4 sm:px-6">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-white/10 px-4 py-3 sm:px-6 sm:py-4 lg:shrink-0 [@media(max-height:600px)]:!shrink">
           <button
             type="button"
             onClick={onCloseFinishedEvent}
@@ -178,8 +178,8 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
     const playerComp = sortedCompetitors.find((c) => c.isPlayer);
 
     return (
-      <div className="pointer-events-auto mx-auto flex max-h-[calc(100vh-5.2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#071726]/92 shadow-2xl">
-        <div className="relative border-b border-white/10 p-5 sm:p-6">
+      <div className="pointer-events-auto mx-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border border-white/15 bg-[#071726]/92 shadow-2xl sm:max-h-[calc(100dvh-1.75rem)] lg:max-h-[calc(100dvh-3rem)] lg:overflow-hidden [@media(max-height:600px)]:!overflow-y-auto">
+        <div className="relative border-b border-white/10 p-4 sm:p-5 lg:shrink-0 [@media(max-height:600px)]:!shrink">
           <img
             src={photoSrc}
             alt={event.name}
@@ -193,21 +193,21 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
               <div className="text-xs font-medium tracking-[0.14em] text-[#38d9c8]">
                 {event.name} · {tournament.roundLabel}
               </div>
-              <h2 className="font-display mt-1 text-2xl font-bold text-white">
+              <h2 className="font-display mt-1 text-xl font-bold text-white sm:text-2xl">
                 Classificado para a próxima fase!
               </h2>
               <p className="mt-0.5 text-xs text-[#E7DCC8]/80">
                 Somatório das 2 melhores ondas: {(playerComp?.bestTwoTotal ?? 0).toFixed(1)} pts
               </p>
             </div>
-            <div className="inline-flex items-center gap-2 rounded-lg border border-[#38d9c8]/50 bg-[#0B3C5D]/75 px-3.5 py-2 text-xs font-semibold text-[#38d9c8]">
+            <div className="inline-flex w-fit items-center gap-2 rounded-lg border border-[#38d9c8]/50 bg-[#0B3C5D]/75 px-3.5 py-2 text-xs font-semibold text-[#38d9c8]">
               <Award className="h-4 w-4" />
               <span>{playerComp?.heatRank ?? 1}º lugar na bateria</span>
             </div>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+        <div className="min-h-0 flex-1 space-y-5 p-4 sm:p-6 lg:overflow-y-auto [@media(max-height:600px)]:!overflow-visible">
           {(() => {
             const heatRivNotif = (career.rivalryNotifications ?? []).find(
               (n) => !n.seen && n.eventName === event.name
@@ -308,7 +308,7 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
           )}
         </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-white/10 px-5 py-4 sm:px-6">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-white/10 px-4 py-3 sm:px-6 sm:py-4 lg:shrink-0 [@media(max-height:600px)]:!shrink">
           <button
             type="button"
             onClick={onAdvanceRound}
@@ -327,8 +327,8 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
   const advancingCount = (playerHeat?.competitors.length ?? 2) >= 4 ? 2 : 1;
 
   return (
-    <div className="pointer-events-auto mx-auto flex max-h-[calc(100vh-5.2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#071726]/92 shadow-2xl">
-      <div className="relative border-b border-white/10 p-5 sm:p-6">
+    <div className="pointer-events-auto mx-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col overflow-y-auto rounded-2xl border border-white/15 bg-[#071726]/92 shadow-2xl sm:max-h-[calc(100dvh-1.75rem)] lg:max-h-[calc(100dvh-3rem)] lg:overflow-hidden [@media(max-height:600px)]:!overflow-y-auto">
+      <div className="relative border-b border-white/10 p-4 sm:p-5 lg:shrink-0 [@media(max-height:600px)]:!shrink">
         <img
           src={photoSrc}
           alt={event.name}
@@ -338,13 +338,13 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#071726] via-[#071726]/86 to-[#071726]/65" />
 
         <div className="relative z-10 flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 text-xs font-medium tracking-[0.14em] text-[#38d9c8]">
               <span>{tierInfo.name}</span>
               <span aria-hidden="true" className="text-white/35">·</span>
               <span>{tournament.roundLabel}</span>
             </div>
-            <h2 className="font-display mt-1 text-2xl font-bold text-white sm:text-3xl">
+            <h2 className="font-display mt-1 text-xl font-bold text-white sm:text-3xl">
               {event.name}
             </h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#E7DCC8]/85">
@@ -372,14 +372,14 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
             type="button"
             onClick={onCancelPreHeat}
             aria-label="Voltar ao painel da carreira"
-            className="rounded-lg border border-white/15 bg-[#071726]/75 p-2 text-white/75 transition-colors hover:border-white/30 hover:text-white"
+            className="shrink-0 rounded-lg border border-white/15 bg-[#071726]/75 p-2 text-white/75 transition-colors hover:border-white/30 hover:text-white"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+      <div className="min-h-0 flex-1 space-y-5 p-4 sm:p-6 lg:overflow-y-auto [@media(max-height:600px)]:!overflow-visible">
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#2596A6]/35 bg-[#0B3C5D]/40 px-4 py-3 text-xs text-white/85">
           <span>
             Duração da bateria: <strong className="font-mono-tabular text-white">{tierInfo.heatDurationSeconds}s</strong> ·
@@ -520,7 +520,7 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
         )}
       </div>
 
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/10 px-5 py-4 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-white/10 px-4 py-3 sm:px-6 sm:py-4 lg:shrink-0 [@media(max-height:600px)]:!shrink">
         <button
           type="button"
           onClick={onCancelPreHeat}
@@ -532,7 +532,7 @@ export const CareerTournamentOverlay: React.FC<CareerTournamentOverlayProps> = (
         <button
           type="button"
           onClick={onLaunchHeat}
-          className="inline-flex items-center gap-2 rounded-lg bg-[#2596A6] px-6 py-2.5 text-xs font-semibold tracking-[0.12em] text-white transition-colors hover:bg-[#2eb0c2] sm:text-sm"
+          className="inline-flex items-center gap-2 rounded-lg bg-[#2596A6] px-4 py-2.5 text-xs font-semibold tracking-[0.08em] text-white transition-colors hover:bg-[#2eb0c2] sm:px-6 sm:text-sm sm:tracking-[0.12em]"
         >
           <span>ENTRAR NA BATERIA (IR PARA A ÁGUA)</span>
           <ChevronRight className="h-4 w-4" />
@@ -615,8 +615,8 @@ function SeasonEndModal({
   const nxtTier = TIER_MAP[summary.nextTier];
 
   return (
-    <div className="pointer-events-auto mx-auto flex max-h-[calc(100vh-5.2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#071726]/94 shadow-2xl">
-      <div className="relative border-b border-white/10 p-6">
+    <div className="pointer-events-auto mx-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-2xl flex-col overflow-y-auto rounded-2xl border border-white/15 bg-[#071726]/94 shadow-2xl sm:max-h-[calc(100dvh-1.75rem)] lg:max-h-[calc(100dvh-3rem)] lg:overflow-hidden [@media(max-height:600px)]:!overflow-y-auto">
+      <div className="relative border-b border-white/10 p-4 sm:p-6 lg:shrink-0 [@media(max-height:600px)]:!shrink">
         <img
           src={CAREER_PHOTOS.twilight}
           alt="Encerramento da Temporada"
@@ -625,15 +625,15 @@ function SeasonEndModal({
         />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#071726] via-[#071726]/88 to-[#071726]/70" />
 
-        <div className="relative z-10 flex items-center gap-4">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-[#38d9c8]/40 bg-[#0B3C5D]/80 text-[#38d9c8]">
-            <Trophy className="h-7 w-7" />
+        <div className="relative z-10 flex items-center gap-3.5 sm:gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[#38d9c8]/40 bg-[#0B3C5D]/80 text-[#38d9c8] sm:h-14 sm:w-14">
+            <Trophy className="h-6 w-6 sm:h-7 sm:w-7" />
           </div>
           <div>
             <div className="text-xs font-medium tracking-[0.14em] text-[#38d9c8]">
               Fechamento da Temporada {summary.season} · {curTier.name}
             </div>
-            <h2 className="font-display mt-1 text-2xl font-bold text-white">
+            <h2 className="font-display mt-1 text-xl font-bold text-white sm:text-2xl">
               {summary.wonWorldTitle
                 ? 'Campeão Mundial do Circuito!'
                 : summary.promoted
@@ -644,8 +644,8 @@ function SeasonEndModal({
         </div>
       </div>
 
-      <div className="space-y-4 p-6">
-        <p className="text-sm leading-relaxed text-white/80">
+      <div className="min-h-0 flex-1 space-y-4 p-4 sm:p-6 lg:overflow-y-auto [@media(max-height:600px)]:!overflow-visible">
+        <p className="text-xs leading-relaxed text-white/80 sm:text-sm">
           {summary.wonWorldTitle
             ? 'Você terminou no topo da elite mundial do FLOW e gravou seu nome na história do circuito.'
             : summary.promoted
@@ -653,7 +653,7 @@ function SeasonEndModal({
               : `Você encerrou a temporada em #${summary.finalRank}. É preciso terminar no Top ${curTier.promoteTopN} do ranking para conquistar promoção ao ${TIER_MAP[summary.tier === 'amador' ? 'regional' : summary.tier === 'regional' ? 'acesso' : 'mundial'].name}.`}
         </p>
 
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
           <MetricBox label="Posição Final" value={`#${summary.finalRank}`} />
           <MetricBox label="Pontuação" value={summary.totalPoints.toLocaleString()} />
           <MetricBox label="Vitórias / Pódios" value={`${summary.wins} / ${summary.podiums}`} />
@@ -665,7 +665,7 @@ function SeasonEndModal({
         </div>
       </div>
 
-      <div className="flex justify-end border-t border-white/10 px-6 py-4">
+      <div className="flex justify-end border-t border-white/10 px-4 py-3 sm:px-6 sm:py-4 lg:shrink-0 [@media(max-height:600px)]:!shrink">
         <button
           type="button"
           onClick={onAdvanceSeason}

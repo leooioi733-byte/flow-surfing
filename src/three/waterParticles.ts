@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { SurferPhysicsState } from './wavePhysics';
 
 interface SprayParticle {
-  active: boolean;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   age: number;
@@ -22,9 +21,8 @@ const MAX_PARTICLES = 320;
 const _dummy = new THREE.Object3D();
 
 /**
- * Pooled InstancedMesh water spray, carve fan, and splash particle system.
- * Driven by simulation delta time (simDt) so water droplets hang dramatically
- * in mid-air during cinematic slow-motion maneuvers.
+ * Compact swap-remove pooled InstancedMesh water spray, carve fan, and splash particle system.
+ * Only active instances are integrated and uploaded to the GPU via mesh.count.
  */
 export function createWaterParticleSystem(): WaterParticleSystem {
   const geometry = new THREE.IcosahedronGeometry(0.085, 1);
@@ -39,26 +37,21 @@ export function createWaterParticleSystem(): WaterParticleSystem {
   const mesh = new THREE.InstancedMesh(geometry, material, MAX_PARTICLES);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false;
+  mesh.count = 0;
 
   const pool: SprayParticle[] = [];
   for (let i = 0; i < MAX_PARTICLES; i++) {
     pool.push({
-      active: false,
       pos: new THREE.Vector3(),
       vel: new THREE.Vector3(),
       age: 0,
       life: 1,
       size: 1,
     });
-    _dummy.scale.setScalar(0);
-    _dummy.updateMatrix();
-    mesh.setMatrixAt(i, _dummy.matrix);
   }
-  mesh.instanceMatrix.needsUpdate = true;
 
-  let cursor = 0;
-  let emitAccum = 0;
   let activeCount = 0;
+  let emitAccum = 0;
   let qualityScale = 1.0;
 
   const setQualityScale = (scale: number) => {
@@ -75,12 +68,15 @@ export function createWaterParticleSystem(): WaterParticleSystem {
     life: number,
     size: number
   ) => {
-    const p = pool[cursor];
-    cursor = (cursor + 1) % MAX_PARTICLES;
-    if (!p.active) {
+    let idx: number;
+    if (activeCount < MAX_PARTICLES) {
+      idx = activeCount;
       activeCount++;
+    } else {
+      // Recycle oldest slot at index 0
+      idx = 0;
     }
-    p.active = true;
+    const p = pool[idx];
     p.pos.set(x, y, z);
     p.vel.set(vx, vy, vz);
     p.age = 0;
@@ -90,15 +86,8 @@ export function createWaterParticleSystem(): WaterParticleSystem {
 
   const reset = () => {
     emitAccum = 0;
-    if (activeCount === 0) return;
     activeCount = 0;
-    for (let i = 0; i < MAX_PARTICLES; i++) {
-      pool[i].active = false;
-      _dummy.scale.setScalar(0);
-      _dummy.updateMatrix();
-      mesh.setMatrixAt(i, _dummy.matrix);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
+    mesh.count = 0;
   };
 
   const update = (simDt: number, state: SurferPhysicsState) => {
@@ -164,20 +153,24 @@ export function createWaterParticleSystem(): WaterParticleSystem {
       }
     }
 
-    if (activeCount === 0) return;
+    if (activeCount === 0) {
+      mesh.count = 0;
+      return;
+    }
 
-    // 3. Integrate particles with gravity & air drag
-    for (let i = 0; i < MAX_PARTICLES; i++) {
+    // 3. Compact swap-remove integration over ONLY active particles
+    let i = 0;
+    while (i < activeCount) {
       const p = pool[i];
-      if (!p.active) continue;
-
       p.age += simDt;
       if (p.age >= p.life) {
-        p.active = false;
-        activeCount = Math.max(0, activeCount - 1);
-        _dummy.scale.setScalar(0);
-        _dummy.updateMatrix();
-        mesh.setMatrixAt(i, _dummy.matrix);
+        const lastIdx = activeCount - 1;
+        if (i !== lastIdx) {
+          const tail = pool[lastIdx];
+          pool[lastIdx] = p;
+          pool[i] = tail;
+        }
+        activeCount--;
         continue;
       }
 
@@ -191,8 +184,13 @@ export function createWaterParticleSystem(): WaterParticleSystem {
       _dummy.scale.setScalar(Math.max(0.001, scale));
       _dummy.updateMatrix();
       mesh.setMatrixAt(i, _dummy.matrix);
+      i++;
     }
-    mesh.instanceMatrix.needsUpdate = true;
+
+    mesh.count = activeCount;
+    if (activeCount > 0) {
+      mesh.instanceMatrix.needsUpdate = true;
+    }
   };
 
   return {

@@ -244,7 +244,7 @@ export function createOceanSystem(
         float steepScale = (0.62 + shoalBuild * 0.46) * (1.0 - shoreDecay * 0.25);
         float breakProgress = smoothstep(-82.0, -26.0, uWaveCenterZ);
 
-        float lateralDecay = exp(-pow((x - uBreakX * 0.4) / 145.0, 2.0));
+        float lateralDecay = exp(-pow((x - uBreakX) / 145.0, 2.0));
         float shoulderTaper = 1.0 - smoothstep(14.0, 72.0, relBreak) * 0.42;
         float whitewaterDamp = 1.0 - smoothstep(4.0, 28.0, -relBreak) * (0.14 + 0.22 * breakProgress);
         float localH = uSurfWaveHeight * heightScale * lateralDecay * shoulderTaper * whitewaterDamp;
